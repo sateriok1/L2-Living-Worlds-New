@@ -596,7 +596,7 @@ public class FakePlayerBehaviorManager implements IXmlReader
 					}
 					else
 					{
-						stock = FakePlayerStoreFactory.generateSell(population.center);
+						stock = FakePlayerStoreFactory.generateSell(population.center, level, fullStock);
 						storeId = kind.equals("PACKAGE") ? PrivateStoreType.PACKAGE_SELL.getId() : PrivateStoreType.SELL.getId();
 					}
 					if (!stock.isEmpty())
@@ -1008,6 +1008,8 @@ public class FakePlayerBehaviorManager implements IXmlReader
 
 	/**
 	 * A SELL vendor opens its shop when its town's stock reaches it, and trims it (closing it when empty) as the goods go.
+	 * Without a store supply (Living Population off) the rolled stores are left as they are and never restocked at
+	 * runtime, as before; a rolled store opened before the supply was set closes so the vendor can sell the stock.
 	 */
 	private void restockStore(Npc npc, BotState state, long now)
 	{
@@ -1028,7 +1030,11 @@ public class FakePlayerBehaviorManager implements IXmlReader
 			FakePlayerStoreManager.refresh(npc, look);
 			return;
 		}
-		final List<FakePlayerStoreItem> stock = FakePlayerStoreFactory.generateSell(population.center);
+		if (FakePlayerStoreFactory.supply() == null)
+		{
+			return;
+		}
+		final List<FakePlayerStoreItem> stock = FakePlayerStoreFactory.generateSell(population.center, npc.getLevel(), false);
 		if (stock.isEmpty())
 		{
 			return;

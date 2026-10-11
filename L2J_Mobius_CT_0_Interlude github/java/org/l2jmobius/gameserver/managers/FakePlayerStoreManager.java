@@ -458,7 +458,8 @@ public class FakePlayerStoreManager
 	}
 
 	/**
-	 * Cuts an open store's supplied lines down to what the supply still holds, and closes the store when nothing is left.
+	 * Cuts an open store's supplied lines down to what the supply still holds, drops its rolled lines when a supply is
+	 * set, and closes the store when nothing is left.
 	 * @param npc the vendor
 	 * @param look its appearance
 	 */
@@ -477,6 +478,10 @@ public class FakePlayerStoreManager
 				{
 					final int held = (supply == null) ? 0 : supply.available(entry.getSource(), entry.getItemId());
 					entry.decrease(entry.getCount() - held);
+				}
+				else if (supply != null)
+				{
+					entry.decrease(entry.getCount()); // a rolled line goes once a supply provides the goods
 				}
 			}
 			settle(npc, look);

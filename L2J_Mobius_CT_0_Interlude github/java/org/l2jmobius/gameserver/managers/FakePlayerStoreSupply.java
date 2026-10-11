@@ -24,8 +24,8 @@ import org.l2jmobius.gameserver.model.Location;
 
 /**
  * The goods the SELL stores of the fake-player vendors are made from. A module sets one with
- * {@link FakePlayerStoreFactory#setSupply(FakePlayerStoreSupply)}; without one, or when it offers too little for a spot,
- * there is no SELL store there. A store line made from an offer remembers its source, and a purchase of that line goes
+ * {@link FakePlayerStoreFactory#setSupply(FakePlayerStoreSupply)}; without one the SELL stores
+ * are rolled as before, and with one a spot it offers too little at has no SELL store. A store line made from an offer remembers its source, and a purchase of that line goes
  * through {@link #withdraw}, {@link #paid} and {@link #restore} so whoever owns the goods is paid.
  */
 public interface FakePlayerStoreSupply
