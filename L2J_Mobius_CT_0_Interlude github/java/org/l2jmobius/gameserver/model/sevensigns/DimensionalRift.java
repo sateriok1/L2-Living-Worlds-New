@@ -92,6 +92,10 @@ public class DimensionalRift
 			}
 			
 			p.teleToLocation(coords);
+			if (p.getClient() == null)
+			{
+				p.onTeleported(); // a clientless phantom never confirms a teleport, so finish it here
+			}
 		}
 		
 		createSpawnTimer(_choosenRoom);
@@ -343,6 +347,10 @@ public class DimensionalRift
 		DimensionalRiftManager.getInstance().getRoom(_type, _choosenRoom).setPartyInside(true);
 		checkBossRoom(_choosenRoom);
 		player.teleToLocation(getRoomCoord(_choosenRoom));
+		if (player.getClient() == null)
+		{
+			player.onTeleported(); // a clientless phantom never confirms a teleport, so finish it here
+		}
 	}
 	
 	protected void teleportToWaitingRoom(Player player)

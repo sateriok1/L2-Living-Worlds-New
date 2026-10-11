@@ -296,9 +296,8 @@ public class PhantomManager implements IXmlReader
 	// the phantom on despawn, so nothing leaks into the economy.
 	private static final int REZ_SCROLL_ID = 737;
 	private static final int REZ_SCROLL_COUNT = 3;
-	// Dimensional Fragment: every phantom carries one so it satisfies the Dimensional Rift entry requirement
-	// (each party member must hold at least one fragment). With the rift entry cost configurable to 0 the fragment
-	// is never consumed, so a single copy is enough and it leaves with the phantom on despawn.
+	// Dimensional Fragment: every phantom carries one, and topUpRiftFragments() raises a party phantom to the full
+	// entry cost (General.ini RecruitCost to HeroCost, 18 to 33 by default) right before the party enters the rift.
 	private static final int DIMENSION_FRAGMENT_ID = 7079;
 	// Buff reagents: a few support buffs consume an item per cast (the prophet's Greater Might / Greater Shield
 	// and the caster's Clarity all eat Spirit Ore, id 3031). A clientless buffer that has none silently fails the
@@ -1846,6 +1845,30 @@ public class PhantomManager implements IXmlReader
 	public boolean isPhantom(Player player)
 	{
 		return (player != null) && _phantoms.containsKey(player.getObjectId());
+	}
+
+	/**
+	 * Tops a party phantom up to the Dimensional Rift entry cost. A phantom cannot hunt or buy fragments the way a
+	 * player does, so without this a party with a phantom in it could never enter the rift at the default costs.
+	 * Called by {@link DimensionalRiftManager} right before it checks and takes the fragments; real players and
+	 * phantoms that already hold enough are left untouched.
+	 * @param player the party member
+	 * @param fragmentId the Dimensional Fragment item id
+	 * @param count the fragments the chosen rift takes from each member
+	 */
+	public void topUpRiftFragments(Player player, int fragmentId, int count)
+	{
+		if ((count <= 0) || !isPhantom(player))
+		{
+			return;
+		}
+
+		final Item held = player.getInventory().getItemByItemId(fragmentId);
+		final int have = (held == null) ? 0 : (int) Math.min(count, held.getCount());
+		if (have < count)
+		{
+			player.getInventory().addItem(ItemProcessType.REWARD, fragmentId, count - have, player, null);
+		}
 	}
 
 	/**
