@@ -753,17 +753,15 @@ public class PhantomPlaystyleEngine
 	public static CastAction pickPrep(Player npc, PlayState state)
 	{
 		state.refreshIfReloaded();
-		if (!state.lookedUp)
-		{
-			state.lookedUp = true;
-			state.playstyle = PhantomPlaystyleData.getInstance().getPlaystyle(npc.getPlayerClass().getId(), null);
-		}
-		if (state.playstyle == null)
+		// FPC-302: no role here, so never cache this lookup - a role-split lineage (daggers, archers) resolves to null
+		// without its role, and caching that would stop the combat pick from resolving it. Charge classes are not split.
+		final Playstyle playstyle = state.lookedUp ? state.playstyle : PhantomPlaystyleData.getInstance().getPlaystyle(npc.getPlayerClass().getId(), null);
+		if (playstyle == null)
 		{
 			return null;
 		}
 		final long now = System.currentTimeMillis();
-		for (PlayEntry builder : state.playstyle.entries)
+		for (PlayEntry builder : playstyle.entries)
 		{
 			final Skill skill = npc.getKnownSkill(builder.skillId);
 			if ((skill == null) || !builder.appliesAt(npc.getLevel()) || !builder.conds.contains(Cond.CHARGES_BELOW) || (skill.getTargetType() != TargetType.SELF))
