@@ -458,10 +458,6 @@ public class FakePlayerStoreManager
 	}
 
 	/**
-	 * Drops sold-out lines; when the whole store empties, the vendor closes (sign removed). Vendors are
-	 * not restocked at runtime on purpose — every server start generates fresh stock for them.
-	 */
-	/**
 	 * Cuts an open store's supplied lines down to what the supply still holds, and closes the store when nothing is left.
 	 * @param npc the vendor
 	 * @param look its appearance
@@ -496,6 +492,10 @@ public class FakePlayerStoreManager
 		}
 	}
 
+	/**
+	 * Drops sold-out lines; when the whole store empties, the vendor closes (sign removed). SELL vendors reopen from
+	 * the store supply when it has goods for them again.
+	 */
 	private static void settle(Npc npc, FakePlayerAppearance look)
 	{
 		final List<FakePlayerStoreItem> remaining = new ArrayList<>();

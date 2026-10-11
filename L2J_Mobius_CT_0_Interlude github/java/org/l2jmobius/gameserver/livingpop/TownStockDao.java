@@ -21,6 +21,7 @@ package org.l2jmobius.gameserver.livingpop;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -58,26 +59,46 @@ public class TownStockDao
 	}
 
 	/**
-	 * @param stock the stock to write; every row is replaced with its current count
+	 * Writes the listings that changed since the last save: a changed one is replaced with its current count, an emptied
+	 * one is deleted (FPC-303: a sold or cleared listing must not come back on the next load). On a failure the changes
+	 * stay marked for the next save.
+	 * @param stock the stock to write
 	 */
 	public void save(TownStock stock)
 	{
-		try (Connection con = DatabaseFactory.getConnection();
-			PreparedStatement ps = con.prepareStatement("REPLACE INTO living_town_listings (town,owner_id,item_id,quantity) VALUES (?,?,?,?)"))
+		final List<TownStock.Listing> changes = stock.changes();
+		if (changes.isEmpty())
 		{
-			for (TownStock.Listing listing : stock.listings())
+			return;
+		}
+		try (Connection con = DatabaseFactory.getConnection();
+			PreparedStatement replace = con.prepareStatement("REPLACE INTO living_town_listings (town,owner_id,item_id,quantity) VALUES (?,?,?,?)");
+			PreparedStatement delete = con.prepareStatement("DELETE FROM living_town_listings WHERE town=? AND owner_id=? AND item_id=?"))
+		{
+			for (TownStock.Listing listing : changes)
 			{
-				ps.setString(1, listing.town());
-				ps.setLong(2, listing.owner());
-				ps.setInt(3, listing.itemId());
-				ps.setLong(4, listing.count());
-				ps.addBatch();
+				if (listing.count() > 0)
+				{
+					replace.setString(1, listing.town());
+					replace.setLong(2, listing.owner());
+					replace.setInt(3, listing.itemId());
+					replace.setLong(4, listing.count());
+					replace.addBatch();
+				}
+				else
+				{
+					delete.setString(1, listing.town());
+					delete.setLong(2, listing.owner());
+					delete.setInt(3, listing.itemId());
+					delete.addBatch();
+				}
 			}
-			ps.executeBatch();
-			stock.clean();
+			replace.executeBatch();
+			delete.executeBatch();
 		}
 		catch (Exception e)
 		{
+			stock.unsaved(changes);
 			LOGGER.log(Level.WARNING, "LivingPopulation: could not save the town stock: " + e.getMessage(), e);
 		}
 	}

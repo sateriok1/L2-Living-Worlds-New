@@ -506,6 +506,19 @@ public class LivingTravelTest
 		stock.restore(taken);
 		check("a sale that falls through puts the items back to their owners", (stock.count("Giran", 3) == 60) && (stock.count("Giran", 5L, 3) == 30) && (stock.count("Giran", 6L, 3) == 30));
 		check("the listings list every owner's items", stock.listings().stream().filter(listing -> listing.town().equals("Giran") && (listing.itemId() == 3)).count() == 2);
+		// FPC-303: a save writes only what changed, and an emptied listing comes back with 0 so its row is deleted.
+		final TownStock saved = new TownStock();
+		saved.add("Giran", 5L, 3, 10);
+		saved.add("Giran", 6L, 3, 10);
+		saved.changes();
+		check("changes are taken once", saved.changes().isEmpty() && !saved.dirty());
+		saved.take("Giran", 3, 15);
+		final List<TownStock.Listing> changes = saved.changes();
+		check("a sold-out listing is reported with a count of 0", (changes.size() == 2) && changes.stream().anyMatch(listing -> (listing.owner() == 5L) && (listing.count() == 0)) && changes.stream().anyMatch(listing -> (listing.owner() == 6L) && (listing.count() == 5)));
+		saved.unsaved(changes);
+		check("a failed save keeps the changes for the next one", saved.dirty() && (saved.changes().size() == 2));
+		saved.decay(1.0, new java.util.Random(1));
+		check("a cleared listing is reported with a count of 0", saved.changes().stream().allMatch(listing -> listing.count() == 0));
 	}
 
 	private static void testDropYield()

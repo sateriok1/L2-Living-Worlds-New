@@ -1598,7 +1598,7 @@ public class LivingPopulationManager
 		Files.write(Path.of(_config.snapshotFile()).resolveSibling("LivingPopulation-townstock.json"), sb.toString().getBytes(StandardCharsets.UTF_8));
 		if (_stockSaving)
 		{
-			_townStockDao.save(_townStock); // marks the stock clean when it is saved
+			_townStockDao.save(_townStock); // writes only the listings that changed, and deletes the emptied ones
 		}
 		else
 		{

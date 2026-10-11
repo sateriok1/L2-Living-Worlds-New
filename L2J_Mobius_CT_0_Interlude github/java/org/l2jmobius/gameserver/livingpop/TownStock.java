@@ -20,16 +20,18 @@ package org.l2jmobius.gameserver.livingpop;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * The items each town holds, like a back-end auction house: every item belongs to the bot that hunted it, and what a
- * buyer pays will go to that owner. Pure (no game types), so the standalone test lane covers it. Nothing takes items
- * out yet.
+ * buyer pays goes to that owner. Items leave through shop sales ({@link #take}) and the stock clearing
+ * ({@link #decay}). Pure (no game types), so the standalone test lane covers it.
  */
 public final class TownStock
 {
@@ -48,7 +50,7 @@ public final class TownStock
 	}
 
 	private final Map<Key, Long> _listings = new ConcurrentHashMap<>();
-	private volatile boolean _dirty;
+	private final Set<Key> _changed = new HashSet<>(); // FPC-303: listings changed or emptied since the last save
 
 	/**
 	 * Adds the items a span of hunting dropped: each item's expected count rounded up or down at random, so small
@@ -85,8 +87,9 @@ public final class TownStock
 	 */
 	public synchronized void add(String town, long owner, int itemId, long count)
 	{
-		_listings.merge(new Key(town, owner, itemId), count, Long::sum);
-		_dirty = true;
+		final Key key = new Key(town, owner, itemId);
+		_listings.merge(key, count, Long::sum);
+		_changed.add(key);
 	}
 
 	/**
@@ -120,6 +123,7 @@ public final class TownStock
 			{
 				_listings.put(key, listing.count() - part);
 			}
+			_changed.add(key);
 			taken.add(new Listing(town, listing.owner(), itemId, part));
 			left -= part;
 			if (left == 0)
@@ -127,7 +131,6 @@ public final class TownStock
 				break;
 			}
 		}
-		_dirty = true;
 		return taken;
 	}
 
@@ -159,11 +162,8 @@ public final class TownStock
 			{
 				_listings.put(key, listing.count() - count);
 			}
+			_changed.add(key);
 			removed.add(new Listing(listing.town(), listing.owner(), listing.itemId(), count));
-		}
-		if (!removed.isEmpty())
-		{
-			_dirty = true;
 		}
 		return removed;
 	}
@@ -247,15 +247,43 @@ public final class TownStock
 		return shares;
 	}
 
-	/** @return whether anything changed since the last {@link #clean()} */
-	public boolean dirty()
+	/** @return whether anything changed since the last save */
+	public synchronized boolean dirty()
 	{
-		return _dirty;
+		return !_changed.isEmpty();
 	}
 
 	/** Marks the stock as saved. */
-	public void clean()
+	public synchronized void clean()
 	{
-		_dirty = false;
+		_changed.clear();
+	}
+
+	/**
+	 * Takes the listings that changed since the last call, for a save. An emptied listing comes back with a count of 0,
+	 * so the save deletes its row instead of leaving the old count to be loaded again.
+	 * @return the changed listings, with their current counts
+	 */
+	public synchronized List<Listing> changes()
+	{
+		final List<Listing> changes = new ArrayList<>();
+		for (Key key : _changed)
+		{
+			changes.add(new Listing(key.town(), key.owner(), key.itemId(), _listings.getOrDefault(key, 0L)));
+		}
+		_changed.clear();
+		return changes;
+	}
+
+	/**
+	 * Marks listings from {@link #changes()} as changed again, when their save failed.
+	 * @param changes the listings that were not saved
+	 */
+	public synchronized void unsaved(List<Listing> changes)
+	{
+		for (Listing listing : changes)
+		{
+			_changed.add(new Key(listing.town(), listing.owner(), listing.itemId()));
+		}
 	}
 }

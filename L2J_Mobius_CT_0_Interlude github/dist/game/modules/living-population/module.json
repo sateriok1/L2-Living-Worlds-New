@@ -10,6 +10,6 @@
   "database": {
     "install": "sql/install.sql",
     "remove": "sql/remove.sql",
-    "tables": ["living_population_bots"]
+    "tables": ["living_population_bots", "living_town_listings"]
   }
 }
