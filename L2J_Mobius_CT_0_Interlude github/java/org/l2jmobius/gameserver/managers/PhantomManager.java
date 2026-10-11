@@ -296,9 +296,8 @@ public class PhantomManager implements IXmlReader
 	// the phantom on despawn, so nothing leaks into the economy.
 	private static final int REZ_SCROLL_ID = 737;
 	private static final int REZ_SCROLL_COUNT = 3;
-	// Dimensional Fragment: every phantom carries one so it satisfies the Dimensional Rift entry requirement
-	// (each party member must hold at least one fragment). With the rift entry cost configurable to 0 the fragment
-	// is never consumed, so a single copy is enough and it leaves with the phantom on despawn.
+	// Dimensional Fragment: every phantom carries one, and topUpRiftFragments() raises a party phantom to the full
+	// entry cost (General.ini RecruitCost to HeroCost, 18 to 33 by default) right before the party enters the rift.
 	private static final int DIMENSION_FRAGMENT_ID = 7079;
 	// Buff reagents: a few support buffs consume an item per cast (the prophet's Greater Might / Greater Shield
 	// and the caster's Clarity all eat Spirit Ore, id 3031). A clientless buffer that has none silently fails the
@@ -508,6 +507,9 @@ public class PhantomManager implements IXmlReader
 	private static final int LOOT_SCAN_RANGE = 250;
 	private static final int LOOT_PICKUP_RANGE = 40;
 	private static final int FIELD_SWEEP_SKILL_ID = 42;
+	// How far a phantom looks for its own spoiled corpse to sweep, and how close one must be while a monster is on it (FPC-295).
+	private static final int FIELD_SWEEP_RANGE = 600;
+	private static final int FIELD_SWEEP_THREAT_RANGE = 150;
 
 	// Body slots a phantom is geared in. R_HAND = sword; the rest are LIGHT/HEAVY armor pieces.
 	private static final BodyPart[] GEAR_SLOTS =
@@ -1490,6 +1492,10 @@ public class PhantomManager implements IXmlReader
 				regular.classId = r.getInt("classId", 0);
 				population.regulars.add(regular);
 			});
+			if ((population.role == BuddyRole.NONE) && !FakePlayersConfig.PHANTOM_FIELD_HUNTERS)
+			{
+				return; // field hunters are switched off (PhantomFieldHunters); support buddy areas still load
+			}
 			generateAutoRegulars(population);
 			_populations.add(population);
 		}));
@@ -1839,6 +1845,30 @@ public class PhantomManager implements IXmlReader
 	public boolean isPhantom(Player player)
 	{
 		return (player != null) && _phantoms.containsKey(player.getObjectId());
+	}
+
+	/**
+	 * Tops a party phantom up to the Dimensional Rift entry cost. A phantom cannot hunt or buy fragments the way a
+	 * player does, so without this a party with a phantom in it could never enter the rift at the default costs.
+	 * Called by {@link DimensionalRiftManager} right before it checks and takes the fragments; real players and
+	 * phantoms that already hold enough are left untouched.
+	 * @param player the party member
+	 * @param fragmentId the Dimensional Fragment item id
+	 * @param count the fragments the chosen rift takes from each member
+	 */
+	public void topUpRiftFragments(Player player, int fragmentId, int count)
+	{
+		if ((count <= 0) || !isPhantom(player))
+		{
+			return;
+		}
+
+		final Item held = player.getInventory().getItemByItemId(fragmentId);
+		final int have = (held == null) ? 0 : (int) Math.min(count, held.getCount());
+		if (have < count)
+		{
+			player.getInventory().addItem(ItemProcessType.REWARD, fragmentId, count - have, player, null);
+		}
 	}
 
 	/**
@@ -3056,7 +3086,7 @@ public class PhantomManager implements IXmlReader
 		{
 			parkHunterPlaystyle(phantom, data);
 		}
-		phantom.broadcastUserInfo();
+		showLivingLook(phantom);
 	}
 
 	/**
@@ -3084,7 +3114,7 @@ public class PhantomManager implements IXmlReader
 		{
 			parkHunterPlaystyle(phantom, data);
 		}
-		phantom.broadcastUserInfo();
+		showLivingLook(phantom);
 	}
 
 	/**
@@ -3591,7 +3621,7 @@ public class PhantomManager implements IXmlReader
 
 		if (regear)
 		{
-			phantom.broadcastUserInfo();
+			showLivingLook(phantom);
 			if (data != null)
 			{
 				registerAutoSkills(phantom);
@@ -3706,6 +3736,30 @@ public class PhantomManager implements IXmlReader
 			}
 		}
 		livingWeaponChanged(phantom, before);
+		showLivingLook(phantom);
+	}
+
+	/**
+	 * Refreshes a live Living Population bot for itself and for every player who can see it. The bot has no client, so
+	 * the stock broadcastUserInfo (and the broadcastCharInfo inside an equip) returns early for it and nearby players kept
+	 * seeing its old gear, class and weapon until it walked out of view and back (FPC-294, the FPC-151 case for living
+	 * bots). Does nothing before the bot is spawned.
+	 * @param phantom the bot
+	 */
+	private static void showLivingLook(Player phantom)
+	{
+		phantom.broadcastUserInfo();
+		if (!phantom.isSpawned())
+		{
+			return;
+		}
+		World.getInstance().forEachVisibleObject(phantom, Player.class, player ->
+		{
+			if (phantom.isVisibleFor(player))
+			{
+				phantom.sendInfo(player);
+			}
+		});
 	}
 
 	/**
@@ -3837,7 +3891,7 @@ public class PhantomManager implements IXmlReader
 		}
 		if (!worn.isEmpty())
 		{
-			phantom.broadcastUserInfo();
+			showLivingLook(phantom);
 		}
 		return new LivingBag(List.copyOf(worn), loot, sold, soldItems);
 	}
@@ -9882,13 +9936,19 @@ public class PhantomManager implements IXmlReader
 		return best;
 	}
 
-	/** Managed field Sweeper runs before pickup while the existing post-kill deadline still owns the scanner. */
+	/**
+	 * Managed field Sweeper runs before pickup while the existing post-kill deadline still owns the scanner. A phantom
+	 * that is already being hit by the next monster still sweeps a spoiled corpse at its feet (a half second cast): it
+	 * used to skip the sweep whenever anything was on it, fight on, and the spoil rotted away (FPC-295). It does not
+	 * walk off to a farther corpse while under attack.
+	 */
 	private boolean sweepFieldCorpses(Player phantom, PhantomData data)
 	{
-		if (!FakePlayersConfig.PHANTOM_COMBAT_CONTROLLER || (data.play == null) || !data.play.controllerOwned || underAttack(phantom))
+		if (!FakePlayersConfig.PHANTOM_COMBAT_CONTROLLER || (data.play == null) || !data.play.controllerOwned)
 		{
 			return false;
 		}
+		final int range = underAttack(phantom) ? FIELD_SWEEP_THREAT_RANGE : FIELD_SWEEP_RANGE;
 		final Skill sweeper = phantom.getKnownSkill(FIELD_SWEEP_SKILL_ID);
 		if (sweeper == null)
 		{
@@ -9900,7 +9960,7 @@ public class PhantomManager implements IXmlReader
 		}
 		Monster closest = null;
 		double distance = Double.MAX_VALUE;
-		for (Monster corpse : World.getInstance().getVisibleObjectsInRange(phantom, Monster.class, 600))
+		for (Monster corpse : World.getInstance().getVisibleObjectsInRange(phantom, Monster.class, range))
 		{
 			if (corpse.isDead() && corpse.isSweepActive() && (corpse.getSpoilerObjectId() == phantom.getObjectId()) && corpse.checkSpoilOwner(phantom, false)
 				&& (phantom.calculateDistance2D(corpse) < distance))
@@ -10390,13 +10450,16 @@ public class PhantomManager implements IXmlReader
 		wake(phantom);
 	}
 
-	/** Genuine, client-connected players (excludes phantoms and offline shops, which have no client). */
+	/**
+	 * Genuine, client-connected players (excludes phantoms and offline shops, which have no client). A dead player still
+	 * counts: the player is still there watching, and the phantoms nearby used to park until the player got up (FPC-290).
+	 */
 	private static List<Player> onlineObservers()
 	{
 		final List<Player> observers = new ArrayList<>();
 		for (Player player : World.getInstance().getPlayers())
 		{
-			if (!player.isInOfflineMode() && !player.isDead())
+			if (!player.isInOfflineMode())
 			{
 				observers.add(player);
 			}

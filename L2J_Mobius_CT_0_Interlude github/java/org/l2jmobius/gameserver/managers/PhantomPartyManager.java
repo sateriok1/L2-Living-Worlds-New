@@ -444,11 +444,13 @@ public class PhantomPartyManager
 	// STRONG heals for a big but non-critical gap, where there's time to cast (5s). Greater Battle Heal still leads
 	// (a Bishop's fast casting makes it the default even here); Major Heal follows as the MP-smart option - it heals
 	// as much as Greater Battle Heal for less than half the MP (~48 vs ~108) at the cost of cast time + 1 Spirit Ore,
-	// so it doubles as the graceful fallback when the healer is low on MP; Greater Heal (5s, +HP-regen HoT) is last.
+	// so it doubles as the graceful fallback when the healer is low on MP; Vitalize (no reagent) covers an empty Spirit Ore stock;
+	// Greater Heal (5s, +HP-regen HoT) is last.
 	private static final int[] STRONG_HEAL_PRIORITY =
 	{
 		1218, // Greater Battle Heal
 		1401, // Major Heal (Bishop/Cardinal 56+, +1 Spirit Ore) - big heal, very MP-cheap; also the low-MP fallback
+		1020, // Vitalize (Bishop/Elder lines 48+) - about twice Greater Heal's power with no reagent, so the Spirit Ore-free step down
 		1217 // Greater Heal (+HP-regen HoT)
 	};
 
@@ -2915,15 +2917,6 @@ public class PhantomPartyManager
 			return;
 		}
 
-		// Charge classes bank their sonic/force energy while settled and out of combat, so a pull OPENS prepared
-		// instead of building reactively - an experienced player taps up charges before engaging, and Interlude
-		// charge energy persists ~10 minutes so one pre-charge carries many pulls. Only when standing near the
-		// leader and not already fighting; mid-fight charge upkeep is the playstyle rotation's job. Whether the
-		// class even has a builder is decided by the engine (non-charge classes fall straight through).
-		if (!npc.isInCombat() && (npc.calculateDistance2D(owner) <= SUPPORT_RANGE) && prepCharges(state))
-		{
-			return;
-		}
 		// Out of the fight a stance that drains MP (Vicious Stance) goes off; the next fight turns it back on.
 		if (!npc.isInCombat())
 		{
@@ -6538,30 +6531,6 @@ public class PhantomPartyManager
 		}
 		PhantomBuffs.releaseBuff(target.getObjectId(), buff, state.npc.getObjectId());
 		return false;
-	}
-
-	/**
-	 * Out-of-combat charge banking for a charge class (Gladiator / Tyrant lines): if the member is standing ready
-	 * and below its authored target charge, self-cast the class's charge-builder so the next pull opens prepared.
-	 * A no-op for classes with no builder, for a member that is resting or repositioning, or once it is already
-	 * topped up (the builder stops firing, and Interlude charges then persist ~10 minutes across pulls).
-	 * @return {@code true} if a builder cast launched this tick (caller skips the rest of the tick)
-	 */
-	private boolean prepCharges(Member state)
-	{
-		final Player npc = state.npc;
-		if (npc.isSitting() || npc.isMoving())
-		{
-			return false; // resting to recover, or running to catch up - don't interrupt just to charge
-		}
-		final PhantomPlaystyleEngine.CastAction action = PhantomPlaystyleEngine.pickPrep(npc, state.play, state.role.name());
-		if (action == null)
-		{
-			return false;
-		}
-		npc.setTarget(action.target);
-		castManaged(state, action.skill);
-		return npc.isCastingNow() || npc.isCastingSimultaneouslyNow();
 	}
 
 	/** Living mobs near the tank whose most-hated is a squishy party member (aggro slipped onto a healer/caster/leader). */

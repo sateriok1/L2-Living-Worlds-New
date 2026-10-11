@@ -47,6 +47,7 @@ import org.l2jmobius.gameserver.config.custom.PremiumSystemConfig;
 import org.l2jmobius.gameserver.data.xml.ItemData;
 import org.l2jmobius.gameserver.managers.CursedWeaponsManager;
 import org.l2jmobius.gameserver.managers.EventDropManager;
+import org.l2jmobius.gameserver.managers.FakePlayerBehaviorManager;
 import org.l2jmobius.gameserver.managers.PcCafePointsManager;
 import org.l2jmobius.gameserver.managers.PhantomBuddyManager;
 import org.l2jmobius.gameserver.managers.PhantomManager;
@@ -786,6 +787,15 @@ public class Attackable extends Npc
 		// Check if fake players should aggro each other.
 		if (isFakePlayer() && !FakePlayersConfig.FAKE_PLAYER_AGGRO_FPC && attacker.isFakePlayer())
 		{
+			return;
+		}
+		// Living World: a town fake player never fights a player, phantom or living bot; one that is hit leaves instead.
+		if (isFakePlayer() && !FakePlayersConfig.FAKE_PLAYER_TOWN_PVP && attacker.isPlayable())
+		{
+			if (damage > 0)
+			{
+				FakePlayerBehaviorManager.getInstance().onAttackedByPlayable(this);
+			}
 			return;
 		}
 		

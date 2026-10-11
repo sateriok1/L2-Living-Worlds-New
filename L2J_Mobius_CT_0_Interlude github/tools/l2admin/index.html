@@ -865,7 +865,9 @@ const PANELS = [
       {key:"PhantomMaxCount", label:"Most phantoms at once", type:"int", default:"5000", unit:"phantoms", short:"Living Population bots near you count too.",
        help:"How many phantoms can be in the world at the same time: field hunters, party recruits, support buddies, friends, Olympiad nobles and Living Population bots near you. Each is a full character, much heavier than a town bot, so a higher number costs memory and CPU. When it is reached no new phantom appears: a party order waits until there is room, and a Living Population bot stays in the background simulation. Town bots don't count."},
       {heading:"Hunting"},
-      {key:"PhantomAutoHuntingZones", label:"Auto generated hunting zones", type:"bool", default:"True", short:"Adds the generated zones on top of your own.",
+      {key:"PhantomFieldHunters", label:"Field phantoms", type:"bool", default:"False", short:"Off: no field hunters anywhere.",
+       help:"Spawn the field phantoms: the hunters you place on the Population map (Phantoms) and the auto generated zones. OFF (default): no field hunter appears. Support buddies, party recruits, friends, Olympiad nobles and Living Population bots are not affected. Restart the server to apply."},
+      {key:"PhantomAutoHuntingZones", parent:"PhantomFieldHunters", label:"Auto generated hunting zones", type:"bool", default:"True", short:"Adds the generated zones on top of your own.",
        help:"Also load the field hunter zones in data/PhantomPopulations.generated.xml, on top of your own PhantomPopulations.xml. A zone stays asleep until a real player comes near."},
       {key:"PhantomHunterPlaystyles", label:"Field hunters use playstyles", type:"bool", default:"True", short:"Class tactics from the Playstyles page.",
        help:"Field hunters and Olympiad nobles use class tactics from the Phantom Playstyles tab. With the combat controller enabled, learned attacks also provide a baseline for classes without a playstyle. OFF: field offensive casting returns to native auto-cast."},
@@ -2757,7 +2759,7 @@ const PS_CONDS = {
   ALWAYS:null, TARGET_HP_BELOW:"hpBelow", TARGET_HP_ABOVE:"hpAbove", SELF_HP_BELOW:"selfHpBelow",
   MP_ABOVE:"mpAbove", MOBS_NEAR:"mobsAtLeast", MOBS_UNSPOILED:"mobsAtLeast", REAR:null, CHARGES:"chargesAtLeast",
   CHARGES_BELOW:"chargesBelow", DEBUFF_MISSING:null, SELF_ABNORMAL_FREE:null, NOT_SPOILED:null,
-  DURABLE_TARGET:null, HEALER_READY:null, ONCE_PER_TARGET:null, UNDER_ATTACK:null, PVP:null, FOCUS_ON_ME:null
+  DURABLE_TARGET:null, HEALER_READY:null, ONCE_PER_TARGET:null, UNDER_ATTACK:null, PVP:null, FOCUS_ON_ME:null, TARGET_FIGHTER:null, SHIELD:null
 };
 const PS_COND_TEXT = {
   ALWAYS:"always", TARGET_HP_BELOW:"target below {v}% HP", TARGET_HP_ABOVE:"target above {v}% HP",
@@ -2766,7 +2768,7 @@ const PS_COND_TEXT = {
   DEBUFF_MISSING:"its slot is free", SELF_ABNORMAL_FREE:"own slot is free", NOT_SPOILED:"target not spoiled",
   DURABLE_TARGET:"target is durable", HEALER_READY:"a healer is ready",
   ONCE_PER_TARGET:"once per target", UNDER_ATTACK:"while under attack",
-  PVP:"against a player", FOCUS_ON_ME:"target has us selected"
+  PVP:"against a player", FOCUS_ON_ME:"target has us selected", TARGET_FIGHTER:"target is a fighter class", SHIELD:"a shield is equipped"
 };
 
 // Skills the party manager casts with its own threat/survival/CC/support logic. Listing one here
@@ -4761,6 +4763,11 @@ const FPC_APP_HTML = `<div id="app">
 			<button id="modeRaid" class="sec">Raid bosses</button>
 		</div>
 
+		<div class="quickbar" id="fieldSwitch">
+			<label style="white-space:nowrap" title="FakePlayers.ini PhantomFieldHunters. Restart the server to apply."><input id="fieldOn" type="checkbox" style="width:auto" /> Field phantoms on</label>
+			<span id="fieldHint" class="muted"></span>
+		</div>
+
 		<div class="quickbar" id="quickbar">
 			<button id="addBtn" class="sec">+ Population</button>
 			<label><input id="showMarks" type="checkbox" checked style="width:auto" /> landmarks</label>
@@ -4994,9 +5001,27 @@ function applyModeUi(){
 	FPCGID('npcOnly').style.display = (mode === 'phantom') ? 'none' : '';
 	FPCGID('phantomOnly').style.display = (mode === 'phantom') ? '' : 'none';
 	FPCGID('friendSection').style.display = (mode === 'phantom') ? '' : 'none';
+	FPCGID('fieldSwitch').style.display = (mode === 'phantom') ? '' : 'none';
+	syncFieldSwitch();
 	FPCGID('respawnText').textContent = (mode === 'phantom') ? 'respawn (replace on death)' : 'respawn (field hunters)';
 	FPCGID('popSectionTitle').textContent = (mode === 'phantom') ? 'Phantom populations' : 'Populations';
 }
+// The field phantom master switch lives in FakePlayers.ini (PhantomFieldHunters), the same key as on the Phantoms page,
+// so it saves with the other settings through l2admin's save bar.
+function syncFieldSwitch(){
+	const box = FPCGID('fieldOn'), hint = FPCGID('fieldHint');
+	const loaded = !!state.files['FakePlayers.ini'];
+	const on = /^true$/i.test(getVal('FakePlayers.ini', 'PhantomFieldHunters') || 'False');
+	box.disabled = !loaded;
+	box.checked = loaded && on;
+	hint.textContent = !loaded ? 'Pick the server folder to change this.' : (on ? '' : 'Off: no field hunters spawn. Buddies, recruits and friends still work.');
+}
+window.__fpcSyncFieldSwitch = syncFieldSwitch;
+FPCGID('fieldOn').onchange = () => {
+	setVal('FakePlayers.ini', 'PhantomFieldHunters', FPCGID('fieldOn').checked ? 'True' : 'False');
+	syncFieldSwitch();
+	FPCGID('fieldHint').textContent = 'Save, then restart the server to apply.';
+};
 function switchMode(m){
 	if (m === mode) return;
 	if (drawMode) setDrawMode(false);
@@ -6720,6 +6745,7 @@ function fpcOpenTab(){
     (psState && psState.rememberedOk && psState.rememberedDir) ||
     (bcState && bcState.rememberedOk && bcState.rememberedDir) || null;
   fpcMount();
+  if (window.__fpcSyncFieldSwitch) window.__fpcSyncFieldSwitch(); // the folder may have been picked since the tab was built
   // Raid-boss scaling now lives in its own NPC.ini config tab, so drop that mode here.
   const rb = root.querySelector('#modeRaid'); if (rb) rb.style.display = 'none';
   // Folder opening is l2admin's job; once game/data is wired the tab's own picker is redundant.

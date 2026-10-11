@@ -87,12 +87,14 @@ public class PhantomPlaystyleData implements IXmlReader
 		DEBUFF_MISSING, // the skill's abnormal slot is free on the target (don't re-stack a held debuff)
 		SELF_ABNORMAL_FREE, // the skill's abnormal slot is free on the CASTER (don't overwrite an active self-limit, e.g. Guts replacing Frenzy in the shared PINCH slot)
 		NOT_SPOILED, // the target has no spoiler yet (Spoil retries on a resisted attempt and never re-casts an already-spoiled mob)
-		DURABLE_TARGET, // target is a raid or meaty enough that a setup cast amortizes
+		DURABLE_TARGET, // target is a raid, or takes this member 8+ seconds to bring down (its own damage vs the target HP), so a setup cast amortizes
 		HEALER_READY, // a live party healer with MP is present (gate for LIMIT self-endangering)
 		ONCE_PER_TARGET, // cast at most once per target (openers, per-fight debuffs)
 		UNDER_ATTACK, // something is actively coming at this member (PANIC gate)
 		PVP, // the target is a player (dagger PvP openers and target drops)
-		FOCUS_ON_ME; // the target has this member selected (Trick/Switch make it drop us)
+		FOCUS_ON_ME, // the target has this member selected (Trick/Switch make it drop us)
+		SHIELD, // the member has a shield equipped (shield-defense toggles do nothing without one)
+		TARGET_FIGHTER; // the target is a player of a non-mystic class (a physical-skill mute is wasted on a mage or healer)
 	}
 
 	/** One ordered playstyle line: cast {@code skillId} when all {@code conds} hold. Immutable after load. */
