@@ -41,6 +41,8 @@ public class FakePlayersConfig
 	public static boolean FAKE_PLAYER_AGGRO_MONSTERS;
 	public static boolean FAKE_PLAYER_AGGRO_PLAYERS;
 	public static boolean FAKE_PLAYER_AGGRO_FPC;
+	public static boolean FAKE_PLAYER_TOWN_PVP;
+	public static boolean PHANTOM_FIELD_HUNTERS;
 	public static boolean FAKE_PLAYER_CAN_DROP_ITEMS;
 	public static boolean FAKE_PLAYER_CAN_PICKUP;
 	public static boolean FAKE_PLAYER_PARTY_QUEST_CREDIT;
@@ -129,6 +131,8 @@ public class FakePlayersConfig
 		FAKE_PLAYER_AGGRO_MONSTERS = config.getBoolean("FakePlayerAggroMonsters", false);
 		FAKE_PLAYER_AGGRO_PLAYERS = config.getBoolean("FakePlayerAggroPlayers", false);
 		FAKE_PLAYER_AGGRO_FPC = config.getBoolean("FakePlayerAggroFPC", false);
+		FAKE_PLAYER_TOWN_PVP = config.getBoolean("FakePlayerTownPvp", false);
+		PHANTOM_FIELD_HUNTERS = config.getBoolean("PhantomFieldHunters", false);
 		FAKE_PLAYER_CAN_DROP_ITEMS = config.getBoolean("FakePlayerCanDropItems", false);
 		FAKE_PLAYER_CAN_PICKUP = config.getBoolean("FakePlayerCanPickup", false);
 		FAKE_PLAYER_PARTY_QUEST_CREDIT = config.getBoolean("FakePlayerPartyQuestCredit", true);

@@ -202,6 +202,7 @@ public class FakePlayerBehaviorManager implements IXmlReader
 		Player summonPlayer;
 		long recallAt; // when the "scroll" finishes casting and the bot lands on the meet spot (0 = not recalling)
 		boolean recallDone; // already recalled once on this meet
+		long escapeAt; // a player or bot hit it: when its Scroll of Escape finishes and it leaves the world (0 = not escaping)
 
 		// A trade arranged from chat: the store to open when the bot reaches the meet spot.
 		int pendingStoreType; // PrivateStoreType id to activate on arrival, or 0 for a plain meet
@@ -982,9 +983,15 @@ public class FakePlayerBehaviorManager implements IXmlReader
 				continue;
 			}
 
+			final BotState state = entry.getValue();
+			if ((state.escapeAt > 0) && (now >= state.escapeAt))
+			{
+				escape(npc, state);
+				continue;
+			}
 			try
 			{
-				process(npc, entry.getValue(), now);
+				process(npc, state, now);
 			}
 			catch (Exception e)
 			{
@@ -1392,6 +1399,46 @@ public class FakePlayerBehaviorManager implements IXmlReader
 			return true;
 		}
 		return (now - state.summonLastProgress) > (FakePlayersConfig.FAKE_PLAYER_MEET_RECALL_STUCK_SECONDS * 1000L);
+	}
+
+	/**
+	 * A player, phantom or living bot hit this town fake (FakePlayerTownPvp off). It does not fight back: it stops, reads
+	 * a Scroll of Escape and leaves the world when the cast is over, and a different bot of its population takes its
+	 * place later. Town fakes are NPCs and their fights with players read as fake, so they leave as a player would.
+	 * @param npc the town fake
+	 */
+	public void onAttackedByPlayable(Npc npc)
+	{
+		final BotState state = _bots.get(npc.getObjectId());
+		if ((state == null) || (state.escapeAt > 0) || npc.isDead())
+		{
+			return;
+		}
+		final int castMs = FakePlayersConfig.FAKE_PLAYER_MEET_RECALL_CAST_SECONDS * 1000;
+		state.escapeAt = System.currentTimeMillis() + castMs;
+		npc.disableCoreAI(true);
+		npc.stopMove(null);
+		npc.setTarget(null);
+		npc.broadcastPacket(new MagicSkillUse(npc, npc, 2013, 1, castMs, 0)); // Scroll of Escape
+	}
+
+	/** The escape cast is over: the bot leaves the world and a fresh one of its population comes later. */
+	private void escape(Npc npc, BotState state)
+	{
+		_bots.remove(npc.getObjectId());
+		npc.deleteMe();
+		final Population population = state.population;
+		if (population != null)
+		{
+			final int generation = _generation;
+			ThreadPool.schedule(() ->
+			{
+				if (generation == _generation)
+				{
+					deployOne(population);
+				}
+			}, RESPAWN_DELAY);
+		}
 	}
 
 	/** Starts the "scroll of escape" cast: the bot stops, plays the cast animation and says so. */

@@ -1493,6 +1493,10 @@ public class PhantomManager implements IXmlReader
 				regular.classId = r.getInt("classId", 0);
 				population.regulars.add(regular);
 			});
+			if ((population.role == BuddyRole.NONE) && !FakePlayersConfig.PHANTOM_FIELD_HUNTERS)
+			{
+				return; // field hunters are switched off (PhantomFieldHunters); support buddy areas still load
+			}
 			generateAutoRegulars(population);
 			_populations.add(population);
 		}));
