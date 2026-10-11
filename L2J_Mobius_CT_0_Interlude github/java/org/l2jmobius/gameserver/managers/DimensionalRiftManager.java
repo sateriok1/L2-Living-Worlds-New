@@ -254,6 +254,10 @@ public class DimensionalRiftManager
 	public void teleportToWaitingRoom(Player player)
 	{
 		player.teleToLocation(getRoom((byte) 0, (byte) 0).getTeleportCoorinates());
+		if (player.getClient() == null)
+		{
+			player.onTeleported(); // a clientless phantom never confirms a teleport, so finish it here
+		}
 	}
 	
 	public synchronized void start(Player player, byte type, Npc npc)
@@ -312,6 +316,12 @@ public class DimensionalRiftManager
 		
 		Item i;
 		final int count = getNeededItems(type);
+		// Phantoms in the party have no way to collect fragments, so top them up to the entry cost.
+		for (Player p : party.getMembers())
+		{
+			PhantomManager.getInstance().topUpRiftFragments(p, DIMENSIONAL_FRAGMENT_ITEM_ID, count);
+		}
+		
 		for (Player p : party.getMembers())
 		{
 			i = p.getInventory().getItemByItemId(DIMENSIONAL_FRAGMENT_ITEM_ID);
