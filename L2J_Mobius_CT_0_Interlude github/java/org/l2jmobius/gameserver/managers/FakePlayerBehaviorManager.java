@@ -96,6 +96,7 @@ public class FakePlayerBehaviorManager implements IXmlReader
 	private static final long DISCOVERY_INTERVAL = 30000;
 	// How often each bot's state machine is evaluated.
 	private static final long BEHAVIOR_INTERVAL = 3000;
+	private static final long STOCK_CHECK_INTERVAL = 30_000; // how often a SELL vendor looks at its town's stock
 	// After a fight we wait this long before resuming wandering.
 	private static final long COMBAT_BACKOFF = 6000;
 	// A killed field bot is replaced (with a fresh identity) after roughly this long.
@@ -212,6 +213,7 @@ public class FakePlayerBehaviorManager implements IXmlReader
 		Player dealPlayer; // the player an offered/pending deal is with, so an abandoned offer can clear its chat context (FPC-019)
 		long dealClaimExpire; // FPC-066: a short atomic hold taken when this bot is selected as a trade responder, before setupDeal fills the deal in (0 = none)
 		boolean dealActive; // a deal store is currently open on this bot
+		long nextStockCheck; // when a SELL vendor next looks at whether its town has goods for it
 
 		BotState(Profile profile, Location home, int radius, Population population)
 		{
@@ -594,11 +596,14 @@ public class FakePlayerBehaviorManager implements IXmlReader
 					}
 					else
 					{
-						stock = FakePlayerStoreFactory.generateSell(level, fullStock);
+						stock = FakePlayerStoreFactory.generateSell(population.center, level, fullStock);
 						storeId = kind.equals("PACKAGE") ? PrivateStoreType.PACKAGE_SELL.getId() : PrivateStoreType.SELL.getId();
 					}
-					look.setStoreItems(stock);
-					look.setStore(storeId, FakePlayerStoreFactory.title(titleKind, stock));
+					if (!stock.isEmpty())
+					{
+						look.setStoreItems(stock);
+						look.setStore(storeId, FakePlayerStoreFactory.title(titleKind, stock));
+					}
 				}
 			}
 			final BotState state = (profile == null) ? null : new BotState(profile, population.center, population.radius, population);
@@ -991,6 +996,7 @@ public class FakePlayerBehaviorManager implements IXmlReader
 			}
 			try
 			{
+				restockStore(npc, state, now);
 				process(npc, state, now);
 			}
 			catch (Exception e)
@@ -998,6 +1004,47 @@ public class FakePlayerBehaviorManager implements IXmlReader
 				LOGGER.warning(getClass().getSimpleName() + ": Behavior error for " + npc.getName() + ": " + e.getMessage());
 			}
 		}
+	}
+
+	/**
+	 * A SELL vendor opens its shop when its town's stock reaches it, and trims it (closing it when empty) as the goods go.
+	 * Without a store supply (Living Population off) the rolled stores are left as they are and never restocked at
+	 * runtime, as before; a rolled store opened before the supply was set closes so the vendor can sell the stock.
+	 */
+	private void restockStore(Npc npc, BotState state, long now)
+	{
+		final Population population = state.population;
+		if ((population == null) || (population.storeType == null) || (now < state.nextStockCheck) || state.dealActive || (state.summonTarget != null))
+		{
+			return;
+		}
+		final String kind = population.storeType.toUpperCase();
+		final FakePlayerAppearance look = npc.getFakePlayerAppearance();
+		if ((look == null) || !(kind.equals("SELL") || kind.equals("PACKAGE")))
+		{
+			return;
+		}
+		state.nextStockCheck = now + STOCK_CHECK_INTERVAL + Rnd.get(STOCK_CHECK_INTERVAL / 3);
+		if (look.getPrivateStoreType() != 0)
+		{
+			FakePlayerStoreManager.refresh(npc, look);
+			return;
+		}
+		if (FakePlayerStoreFactory.supply() == null)
+		{
+			return;
+		}
+		final List<FakePlayerStoreItem> stock = FakePlayerStoreFactory.generateSell(population.center, npc.getLevel(), false);
+		if (stock.isEmpty())
+		{
+			return;
+		}
+		look.setStoreItems(stock);
+		look.setStore(kind.equals("PACKAGE") ? PrivateStoreType.PACKAGE_SELL.getId() : PrivateStoreType.SELL.getId(), FakePlayerStoreFactory.title(kind, stock));
+		npc.disableCoreAI(true);
+		npc.setImmobilized(true);
+		state.phase = Phase.IDLE;
+		refreshFakePlayerVisual(npc);
 	}
 
 	private void process(Npc npc, BotState state, long now)

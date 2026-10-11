@@ -32,6 +32,7 @@ import org.l2jmobius.gameserver.config.RatesConfig;
 import org.l2jmobius.gameserver.config.custom.FakePlayersConfig;
 import org.l2jmobius.gameserver.data.xml.ItemData;
 import org.l2jmobius.gameserver.data.xml.RecipeData;
+import org.l2jmobius.gameserver.model.Location;
 import org.l2jmobius.gameserver.model.actor.holders.npc.FakePlayerCraftItem;
 import org.l2jmobius.gameserver.model.actor.holders.npc.FakePlayerStoreItem;
 import org.l2jmobius.gameserver.model.item.ItemTemplate;
@@ -108,6 +109,8 @@ public class FakePlayerStoreFactory
 	};
 
 	private static volatile boolean _built = false;
+	private static volatile FakePlayerStoreSupply _supply; // the goods SELL stores are made from, or null
+	private static final int MIN_SUPPLY_LINES = 2; // a supplied SELL store needs at least this many different items
 	private static final EnumMap<CrystalType, List<ItemTemplate>> EQUIP = new EnumMap<>(CrystalType.class);
 	private static final EnumMap<CrystalType, List<ItemTemplate>> BULK = new EnumMap<>(CrystalType.class);
 	private static final EnumMap<CrystalType, List<ItemTemplate>> MATERIALS = new EnumMap<>(CrystalType.class);
@@ -743,12 +746,63 @@ public class FakePlayerStoreFactory
 	}
 
 	/**
-	 * Builds a SELL store: a few distinct lines, mostly bulk consumables with some equipment, priced a
-	 * little above reference.
+	 * Sets where SELL stores get their goods from.
+	 * @param supply the supply, or null for rolled SELL stores
+	 */
+	public static void setSupply(FakePlayerStoreSupply supply)
+	{
+		_supply = supply;
+	}
+
+	/** @return the supply set by {@link #setSupply}, or null */
+	public static FakePlayerStoreSupply supply()
+	{
+		return _supply;
+	}
+
+	/**
+	 * Builds a SELL store. With a supply set (the Living Population town stock), it holds only the supply's goods for
+	 * the spot: a few of the items offered there, priced a little above reference, and no store when the supply offers
+	 * too little. Without a supply, the store is rolled as before.
+	 * @param where where the store stands
+	 * @param level the vendor's level (gates equipment grade of a rolled store)
+	 * @param fullStock whether the vendor stands in a market hub (rolled store only)
+	 * @return the stock, empty when a supply has fewer than {@link #MIN_SUPPLY_LINES} items for the spot
+	 */
+	public static List<FakePlayerStoreItem> generateSell(Location where, int level, boolean fullStock)
+	{
+		final FakePlayerStoreSupply supply = _supply;
+		if (supply == null)
+		{
+			return generateRolledSell(level, fullStock);
+		}
+		final List<FakePlayerStoreSupply.Offer> offers = new ArrayList<>(supply.offers(where));
+		final List<FakePlayerStoreItem> stock = new ArrayList<>();
+		if (offers.size() < MIN_SUPPLY_LINES)
+		{
+			return stock;
+		}
+		final int lines = Rnd.get(MIN_SUPPLY_LINES, 5);
+		while (!offers.isEmpty() && (stock.size() < lines))
+		{
+			final FakePlayerStoreSupply.Offer offer = offers.remove(Rnd.get(offers.size()));
+			final ItemTemplate item = ItemData.getInstance().getTemplate(offer.itemId());
+			if ((item != null) && (offer.count() > 0))
+			{
+				stock.add(new FakePlayerStoreItem(STORE_ITEM_OID.getAndIncrement(), item.getId(), 0, offer.count(), priced(effRef(item.getReferencePrice()), 1.0, 1.4), offer.source()));
+			}
+		}
+		return (stock.size() < MIN_SUPPLY_LINES) ? new ArrayList<>() : stock;
+	}
+
+	/**
+	 * Builds a rolled SELL store, used when no supply is set (the Living Population module is off): a few distinct
+	 * lines, mostly bulk consumables with some equipment, priced a little above reference.
 	 * @param level the vendor's level (gates equipment grade)
+	 * @param fullStock whether the vendor stands in a market hub
 	 * @return the generated stock (may be empty if the catalog is unavailable)
 	 */
-	public static List<FakePlayerStoreItem> generateSell(int level, boolean fullStock)
+	private static List<FakePlayerStoreItem> generateRolledSell(int level, boolean fullStock)
 	{
 		build();
 		final int cap = gradeCap(level, fullStock);
