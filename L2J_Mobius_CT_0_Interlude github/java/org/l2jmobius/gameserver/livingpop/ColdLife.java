@@ -971,7 +971,7 @@ public final class ColdLife
 		{
 			// Nothing better it can afford: go back to where it was, even if it no longer fits perfectly.
 			final ZoneChooser.Choice back = ZoneChooser.route(current, town, catalog, situation.freeTeleport());
-			if ((back != null) && (back.fee() <= bot.getAdena()))
+			if ((back != null) && (back.fee() <= bot.getAdena()) && !situation.cannotReturnFrom(current, catalog))
 			{
 				choice = back;
 			}
@@ -1418,7 +1418,7 @@ public final class ColdLife
 		final ColdRisk.State risk = bot.getRisk();
 		final boolean avoiding = risk.avoiding(now);
 		final int level = avoiding ? Math.max(1, bot.getLevel() - ColdRisk.AVOID_LEVEL_PENALTY) : bot.getLevel();
-		return new ZoneChooser.Situation(level, bot.getRace(), current, town, budget, occupancy, context.travel().zoneCapacity(), avoiding ? risk.avoidZone() : null, freeTeleport(bot, context));
+		return new ZoneChooser.Situation(level, bot.getRace(), current, town, budget, occupancy, context.travel().zoneCapacity(), avoiding ? risk.avoidZone() : null, freeTeleport(bot, context), bot.getEscapes() > 0);
 	}
 
 	private static String planKey(GoalPlanner.Plan plan)

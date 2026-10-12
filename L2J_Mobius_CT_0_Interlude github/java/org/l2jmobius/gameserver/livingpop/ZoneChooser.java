@@ -85,23 +85,48 @@ public final class ZoneChooser
 	 * @param avoid a zone it is staying away from after dying there, or null
 	 * @param freeTeleport whether the bot's own level is low enough for the gatekeepers to teleport it for free (the server's
 	 *            MaxFreeTeleportLevel); its own level, not {@code level}, which drops while it avoids a zone
+	 * @param hasEscape whether the bot carries a Scroll of Escape. Without one it does not go where there is no way home on foot
+	 *            or by gatekeeper (an island without a town; see {@link #needsEscape})
 	 */
-	public record Situation(int level, String race, Zone currentZone, Town town, long budget, Map<String, Integer> occupancy, int capacity, String avoid, boolean freeTeleport)
+	public record Situation(int level, String race, Zone currentZone, Town town, long budget, Map<String, Integer> occupancy, int capacity, String avoid, boolean freeTeleport, boolean hasEscape)
 	{
 		public Situation(int level, String race, Zone currentZone, Town town, long budget, Map<String, Integer> occupancy, int capacity)
 		{
-			this(level, race, currentZone, town, budget, occupancy, capacity, null, false);
+			this(level, race, currentZone, town, budget, occupancy, capacity, null, false, true);
 		}
 
 		public Situation(int level, String race, Zone currentZone, Town town, long budget, Map<String, Integer> occupancy, int capacity, String avoid)
 		{
-			this(level, race, currentZone, town, budget, occupancy, capacity, avoid, false);
+			this(level, race, currentZone, town, budget, occupancy, capacity, avoid, false, true);
+		}
+
+		public Situation(int level, String race, Zone currentZone, Town town, long budget, Map<String, Integer> occupancy, int capacity, String avoid, boolean freeTeleport)
+		{
+			this(level, race, currentZone, town, budget, occupancy, capacity, avoid, freeTeleport, true);
 		}
 
 		boolean avoids(Zone zone)
 		{
 			return (avoid != null) && avoid.equals(zone.name());
 		}
+
+		/** @return whether the bot should stay away from this zone because it has no scroll to get back from it */
+		boolean cannotReturnFrom(Zone zone, ZoneCatalog catalog)
+		{
+			return !hasEscape && needsEscape(zone, catalog);
+		}
+	}
+
+	/**
+	 * @param zone a zone
+	 * @param catalog the catalog
+	 * @return whether getting home from the zone takes a Scroll of Escape: no town with shops on its own land, so there is no
+	 *         way back on foot and no gatekeeper there (Devil's Isle)
+	 */
+	public static boolean needsEscape(Zone zone, ZoneCatalog catalog)
+	{
+		final Town home = catalog.nearestShoppingTown(zone.center());
+		return (home == null) || !catalog.sameLand(zone.center(), home.arrival());
 	}
 
 	/**
@@ -136,7 +161,7 @@ public final class ZoneChooser
 		// Keep the current zone while it still fits (up to OUTLEVEL_SLACK levels past its top) and is not clearly
 		// overcrowded. A zone just at its limit is kept: the bots already there do not all bounce out to another one.
 		final Zone current = situation.currentZone();
-		if ((current != null) && !current.isStarter() && !situation.avoids(current) && (situation.level() >= current.minLevel()) && (situation.level() <= (current.maxLevel() + OUTLEVEL_SLACK)) && !overFull(current, situation))
+		if ((current != null) && !current.isStarter() && !situation.avoids(current) && !situation.cannotReturnFrom(current, catalog) && (situation.level() >= current.minLevel()) && (situation.level() <= (current.maxLevel() + OUTLEVEL_SLACK)) && !overFull(current, situation))
 		{
 			final Choice stay = route(current, town, catalog, situation.freeTeleport());
 			if ((stay != null) && (stay.fee() <= situation.budget()))
@@ -149,7 +174,7 @@ public final class ZoneChooser
 		final List<Choice> crowded = new ArrayList<>();
 		for (Zone zone : catalog.zones())
 		{
-			if (zone.isStarter() || !zone.fits(situation.level()) || situation.avoids(zone))
+			if (zone.isStarter() || !zone.fits(situation.level()) || situation.avoids(zone) || situation.cannotReturnFrom(zone, catalog))
 			{
 				continue;
 			}

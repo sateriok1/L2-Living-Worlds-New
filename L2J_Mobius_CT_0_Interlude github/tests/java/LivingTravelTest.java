@@ -191,6 +191,12 @@ public class LivingTravelTest
 		check("then as many potions as fit", tight.potions() == 2L);
 		check("never spends the reserve", (3500L - tight.cost()) >= 2500L);
 
+		// One Scroll of Escape is always bought, from the reserve if it has to be: 450 adena at level 10 is far under the 2500 reserve.
+		final SupplyPlanner.Purchase poorScroll = SupplyPlanner.shop(10, 450L, 0L, 0L, 0L, 1, true, prices(), params);
+		check("a bot under its reserve still buys its first scroll", (poorScroll.escapes() == 1L) && (poorScroll.potions() == 0L) && (poorScroll.soulshots() == 0L) && (poorScroll.cost() == 400L));
+		check("but only the first one from the reserve", SupplyPlanner.shop(10, 900L, 1L, 0L, 0L, 1, true, prices(), params).escapes() == 0L);
+		check("and not what it cannot pay for", SupplyPlanner.shop(10, 300L, 0L, 0L, 0L, 1, true, prices(), params).escapes() == 0L);
+
 		final SupplyPlanner.Purchase rich = SupplyPlanner.shop(20, 500_000L, 2L, 10L, 0L, 1, true, prices(), params);
 		check("an unlocked tier is bought when affordable", rich.upgraded());
 		check("soulshots are topped up to the stock", rich.soulshots() == 2160L);
@@ -1279,6 +1285,16 @@ public class LivingTravelTest
 		check("never on foot to newbie grounds across the water", ZoneChooser.route(catalog.zone("Isle Newbies"), catalog.town("Main"), catalog).way() == ZoneChooser.Way.GATEKEEPER);
 		check("the newbie grounds trip pays the gatekeeper to the island's town", (ZoneChooser.route(catalog.zone("Isle Newbies"), catalog.town("Main"), catalog).fee() == 500L) && ZoneChooser.route(catalog.zone("Isle Newbies"), catalog.town("Main"), catalog).arrival().equals(new Point(0, 0, 0)));
 		check("newbie grounds on the same island are walked to", ZoneChooser.route(catalog.zone("Isle Newbies"), catalog.town("Isle"), catalog).way() == ZoneChooser.Way.WALK);
+
+		// A bot without a Scroll of Escape does not go where there is no way home but the scroll (an island without a town).
+		check("a zone on an island without a town needs a scroll to get home", ZoneChooser.needsEscape(catalog.zone("Rock"), catalog));
+		check("a mainland zone does not", !ZoneChooser.needsEscape(catalog.zone("Shore"), catalog));
+		check("nor do newbie grounds on an island with a town", !ZoneChooser.needsEscape(catalog.zone("Isle Newbies"), catalog));
+		final ZoneChooser.Choice withScroll = ZoneChooser.choose(new ZoneChooser.Situation(35, "Elf", null, catalog.town("Main"), 100_000L, null, 0, null, false, true), catalog, null);
+		check("with a scroll it goes to the island zone", (withScroll != null) && "Rock".equals(withScroll.zone().name()));
+		check("without one it stays away from it", ZoneChooser.choose(new ZoneChooser.Situation(35, "Elf", null, catalog.town("Main"), 100_000L, null, 0, null, false, false), catalog, null) == null);
+		check("and does not go back to it either", ZoneChooser.choose(new ZoneChooser.Situation(35, "Elf", catalog.zone("Rock"), catalog.town("Main"), 100_000L, null, 0, null, false, false), catalog, null) == null);
+		check("a mainland zone needs no scroll", ZoneChooser.choose(new ZoneChooser.Situation(20, "Elf", null, catalog.town("Main"), 100_000L, null, 0, null, false, false), catalog, null) != null);
 
 		// FPC-296: far newbie grounds on the same land go through the gatekeeper to their town, on foot only without one.
 		final ZoneCatalog land = ZoneCatalog.parse(STARTER_XML);

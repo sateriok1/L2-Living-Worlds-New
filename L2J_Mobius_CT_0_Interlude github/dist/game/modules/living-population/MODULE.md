@@ -133,7 +133,7 @@ keeps it.
 | `SoulshotStockMinutes` / `SoulshotRestockFraction` | Minutes of hunting worth of soulshots to carry, and the fraction at which it restocks. |
 | `SoulshotMinPurchase` | Smallest batch of soulshots a bot buys in town (default 200); it buys this many or more, or none on that visit. 0 = any amount. Never more than half the soulshot stock. |
 | `SpiritshotsPerKill` | Spiritshots a mystic (mage, summoner, healer, buffer) fires per cold kill (default 2), in place of `SoulshotsPerKill`. Mystics buy spiritshots of their grade. |
-| `EscapeStock` | Scrolls of Escape a bot likes to carry. |
+| `EscapeStock` | Scrolls of Escape a bot likes to carry. Whatever this is set to, a bot always buys one first, even out of its adena reserve, and does not go to a zone with no way home on foot (an island without a town, such as Devil's Isle) unless it carries one. |
 | `ReserveFloor` / `ReservePerLevel` / `ReserveFraction` | The adena reserve a bot never spends on supplies, gear or spellbooks (`ReserveFraction` at most 0.5). |
 | `MoveSpeed` | Cold walking speed (units per second). |
 | `EscapeCastSeconds` / `ErrandStopSeconds` | Scroll of Escape cast time, and time spent at each town NPC. |

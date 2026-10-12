@@ -195,10 +195,14 @@ public final class SupplyPlanner
 		return (prices.nextTier() > 0) ? prices.nextTier() : (params.gearUpgradeCost() * (gearTier + 1L));
 	}
 
+	/** Scrolls of Escape a bot always keeps, bought before anything else and from the reserve if it has to. */
+	public static final long MIN_ESCAPES = 1L;
+
 	/**
 	 * What a bot buys on a town visit, in the order a player would: a spare Scroll of Escape or two (cheap, and the way
 	 * home), then potions up to its stock, then the next gear tier if it can afford it after that, then soulshots with
-	 * what is left. Every purchase respects the operating reserve; partial amounts are fine, except that soulshots are
+	 * what is left. Every purchase respects the operating reserve, except the first Scroll of Escape ({@link #MIN_ESCAPES}), which a bot
+	 * always buys even out of its reserve; partial amounts are fine, except that soulshots are
 	 * bought in a batch of at least {@link #soulshotMinPurchase} or not at all, as a player would not buy a handful.
 	 * @param level the bot level
 	 * @param adena the bot's adena
@@ -214,8 +218,11 @@ public final class SupplyPlanner
 	public static Purchase shop(int level, long adena, long escapes, long potions, long soulshots, int gearTier, boolean rewardClaimed, Prices prices, Params params)
 	{
 		long budget = spendable(adena, reserve(level, adena, params));
-		final long escapesBought = buy(Math.max(0L, params.escapeStock() - escapes), prices.escape(), budget);
-		budget -= escapesBought * prices.escape();
+		long escapesBought = buy(Math.max(0L, params.escapeStock() - escapes), prices.escape(), budget);
+		// Whatever the reserve says, a bot keeps one Scroll of Escape for emergencies and for the way home from an island: the
+		// first one is bought from the whole purse, ahead of everything else.
+		escapesBought += buy(MIN_ESCAPES - escapes - escapesBought, prices.escape(), adena - (escapesBought * prices.escape()));
+		budget = Math.max(0L, budget - (escapesBought * prices.escape()));
 		final long potionsBought = buy(Math.max(0L, params.potionStock() - potions), prices.potion(), budget);
 		budget -= potionsBought * prices.potion();
 		boolean upgraded = false;
