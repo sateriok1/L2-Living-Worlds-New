@@ -98,6 +98,7 @@ public class LivingTravelTest
 		testClassPath();
 		testClassChange();
 		testClassChangeFirst();
+		testClassTripSafety();
 		testSkillPlanner();
 		testTrainerVisit();
 		testGearRules();
@@ -402,7 +403,7 @@ public class LivingTravelTest
 		poor.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
 		events.clear();
 		ColdLife.advance(poor, 1L, 1L, context, events);
-		check("with nothing better it can afford, it goes back to its old zone", ColdLife.TO_ZONE.equals(poor.getActivity()) && "Near Woods".equals(poor.getZone()));
+		check("too poor for a gatekeeper and past its zone, it walks to a zone that fits instead of going back", ColdLife.TO_ZONE.equals(poor.getActivity()) && "Far Hills".equals(poor.getZone()) && events.stream().anyMatch(e -> e.text().contains("on foot")));
 
 		// Too poor for any gatekeeper: it walks, however far, to the nearest zone that fits, instead of waiting in town.
 		final ColdBot broke = bot(21, "Far Hills", 600L, 10L, 2L, 0);
@@ -1223,6 +1224,87 @@ public class LivingTravelTest
 		check("no quest hunt when its length is 0", (quick.getClassId() == ClassPath.next(18, quick.getId())) && (quick.getQuest() == null));
 	}
 
+	/** The whole trip worked out before setting out, potions on the way, a class change that cuts a break short, and zones reached through chains of gatekeepers. */
+	private static void testClassTripSafety() throws Exception
+	{
+		final String master = "ElfHumanFighterChange2";
+		final ZoneCatalog dead = ZoneCatalog.parse(DEAD_END_XML);
+		final ZoneCatalog.Route route = dead.masterRoute(master, dead.town("Dead"));
+		check("the route adds up every hop: Dead to Far through the hub", (route != null) && "Hub".equals(route.first().name()) && "Far".equals(route.last().name()) && (route.fee() == 1200L));
+		check("a town with the master is a free trip", (dead.masterRoute(master, dead.town("Far")).fee() == 0L) && (dead.masterRoute("NoSuchMaster", dead.town("Dead")) == null));
+		check("the fees to every town through any chain", (dead.feesFrom(dead.town("Dead")).get("Far") == 1200L) && (dead.feesFrom(dead.town("Dead")).get("Dead") == 0L) && (dead.feesFrom(dead.town("Dead")).get("Pricey") == 9000L));
+		check("the nearest master it can walk to", "Far".equals(dead.walkableMasterTown(master, dead.town("Dead")).name()));
+
+		final ColdLife.Params travel = new ColdLife.Params(100.0, 20_000L, 10_000L, 0, 60_000L, 60_000L, 0.0, 8, 300_000L, 2500.0);
+		final long[] quest = new long[]
+		{
+			600_000L,
+			1_200_000L,
+			1_800_000L
+		};
+		final ColdLife.Context context = new ColdLife.Context(dead, supply(), travel, (level, tier) -> prices(), new HashMap<>(), new Random(7), null, level -> 0L, quest);
+
+		// Enough for the first hop but not for the whole trip: it must not pay the hub and then sit there; it runs instead.
+		final ColdBot short1 = bot(45, "Dead Hills", 1_000L, 10L, 2L, 6000);
+		short1.setClassId(19);
+		short1.setQuest(new ClassPath.Quest(ClassPath.Stage.TAKE, 20, 0L));
+		final List<DecisionLog.Event> shortLog = new ArrayList<>();
+		runUntil(short1, 0L, context, shortLog, b -> (b.getQuest().stage() == ClassPath.Stage.HUNT));
+		check("it cannot cover the whole trip, so it does not start paying for it", shortLog.stream().noneMatch(e -> e.text().startsWith("Paid the Dead gatekeeper")));
+		check("it runs to the master and takes the quest", shortLog.stream().anyMatch(e -> e.text().contains("so runs to the class master in Far")) && (short1.getQuest().stage() == ClassPath.Stage.HUNT));
+
+		// Enough for the trip with money over: the potions are bought first, and the trip is still paid.
+		final ColdBot rich = bot(45, "Dead Hills", 20_000L, 0L, 2L, 6000);
+		rich.setClassId(19);
+		rich.setQuest(new ClassPath.Quest(ClassPath.Stage.TAKE, 20, 0L));
+		final List<DecisionLog.Event> richLog = new ArrayList<>();
+		runUntil(rich, 0L, context, richLog, b -> (b.getQuest().stage() == ClassPath.Stage.HUNT));
+		check("with money over it shops on the way, holding back the fees", richLog.stream().anyMatch(e -> e.text().startsWith("Shopped in Dead") && e.text().contains("for the way to its class master")) && richLog.stream().anyMatch(e -> e.text().contains("class master in Hub")));
+		check("and still reaches the master by gatekeeper, with potions", richLog.stream().noneMatch(e -> e.text().contains("runs to")) && richLog.stream().anyMatch(e -> e.text().startsWith("Took the quest for Temple Knight from the class master in Far")) && (rich.getPotions() > 0L));
+
+		// A class change that falls due ends a break, a rest or a trip to a zone early.
+		final ColdLife.Context classes = classContext();
+		final ColdBot afk = bot(20, "Near Woods", 20_000L, 10L, 2L, 0);
+		afk.setClassId(18);
+		afk.setActivity(ColdLife.AFK);
+		afk.setTown("Alpha");
+		afk.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 600_000L));
+		final List<DecisionLog.Event> afkLog = new ArrayList<>();
+		ColdLife.advance(afk, 1_000L, 1_000L, classes, afkLog);
+		check("a class change due ends a break early", ColdLife.CLASS_MASTER.equals(afk.getActivity()) && (afk.getQuest() != null) && afkLog.stream().anyMatch(e -> e.text().contains("ends its break early")));
+		final ColdBot rest = bot(20, "Near Woods", 20_000L, 10L, 2L, 5000);
+		rest.setClassId(18);
+		rest.setActivity(ColdLife.RESTING);
+		rest.setLeg(TravelLeg.stay(new Point(5000, 0, 0), 0L, 600_000L));
+		final List<DecisionLog.Event> restLog = new ArrayList<>();
+		ColdLife.advance(rest, 1_000L, 1_000L, classes, restLog);
+		check("and a rest", ColdLife.HUNTING.equals(rest.getActivity()) && (rest.getQuest() != null) && restLog.stream().anyMatch(e -> e.text().contains("ends its rest early")));
+		final ColdBot trip = bot(20, "Near Woods", 20_000L, 10L, 2L, 0);
+		trip.setClassId(18);
+		trip.setActivity(ColdLife.TO_ZONE);
+		trip.setLeg(TravelLeg.walk(new Point(0, 0, 0), new Point(5000, 0, 0), 0L, 10.0));
+		final List<DecisionLog.Event> tripLog = new ArrayList<>();
+		ColdLife.advance(trip, 1_000L, 1_000L, classes, tripLog);
+		check("and a trip to a zone", ColdLife.HUNTING.equals(trip.getActivity()) && (trip.getQuest() != null) && tripLog.stream().anyMatch(e -> e.text().contains("ends its trip to Near Woods early")));
+		final ColdBot notDue = bot(19, "Near Woods", 20_000L, 10L, 2L, 0);
+		notDue.setClassId(18);
+		notDue.setActivity(ColdLife.TO_ZONE);
+		notDue.setLeg(TravelLeg.walk(new Point(0, 0, 0), new Point(5000, 0, 0), 0L, 10.0));
+		ColdLife.advance(notDue, 1_000L, 1_000L, classes, new ArrayList<>());
+		check("a class change that is not due leaves the trip alone", ColdLife.TO_ZONE.equals(notDue.getActivity()) && (notDue.getQuest() == null));
+
+		// Zones through a chain of gatekeepers, the total known before the bot sets out.
+		final ZoneCatalog chain = ZoneCatalog.parse(DEAD_END_XML.replace("</zones>", "<zone name=\"Far Plains\" minLevel=\"40\" maxLevel=\"60\"><teleport town=\"Far\" x=\"205000\" y=\"0\" z=\"0\" fee=\"100\"/><spot x=\"206000\" y=\"0\" z=\"0\"/></zone></zones>"));
+		final ZoneChooser.Choice far = ZoneChooser.route(chain.zone("Far Plains"), chain.town("Dead"), chain);
+		check("a zone two gatekeepers away is reached, with every fee added up", (far != null) && (far.way() == ZoneChooser.Way.HOP) && "Far".equals(far.viaTown()) && (far.fee() == 1300L));
+		check("and a bot that cannot cover all of it does not pick it", ZoneChooser.choose(new ZoneChooser.Situation(50, "Elf", null, chain.town("Dead"), 1_000L, null, 8), chain, null).zone().name().equals("Dead Hills"));
+
+		// Outleveled and broke while hunting: it walks off to a zone that fits rather than overhunt the one it outgrew.
+		final ColdBot stranded = bot(25, "Near Woods", 0L, 10L, 2L, 5000);
+		runUntil(stranded, 0L, context(0), new ArrayList<>(), b -> !"Near Woods".equals(b.getZone()) && ColdLife.HUNTING.equals(b.getActivity()));
+		check("an outleveled bot with no money moves to a zone that fits", "Far Hills".equals(stranded.getZone()) || "Beyond".equals(stranded.getZone()));
+	}
+
 	// A dead-end town (Dead) whose gatekeeper reaches no class master, a hub (Hub) and a far town (Far) with the second masters;
 	// Pricey also has them but costs far more to reach directly than going through the hub.
 	private static final String DEAD_END_XML = "<zones>" //
@@ -1271,8 +1353,9 @@ public class LivingTravelTest
 		final ColdBot payer = bot(45, "Near Woods", 300L, 10L, 2L, 5000);
 		payer.setClassId(19);
 		payer.setQuest(new ClassPath.Quest(ClassPath.Stage.TAKE, 20, 0L));
-		runUntil(payer, 0L, free, new ArrayList<>(), b -> (b.getQuest().stage() == ClassPath.Stage.HUNT));
-		check("above the free level the same bot still has to afford the gatekeeper", payer.getQuest().stage() == ClassPath.Stage.TAKE);
+		final List<DecisionLog.Event> payerLog = new ArrayList<>();
+		runUntil(payer, 0L, free, payerLog, b -> (b.getQuest().stage() == ClassPath.Stage.HUNT));
+		check("above the free level the same bot cannot pay the gatekeeper, so it runs to the master", payerLog.stream().noneMatch(e -> e.text().startsWith("Paid the")) && payerLog.stream().anyMatch(e -> e.text().contains("so runs to the class master in Beta")) && (payer.getQuest().stage() == ClassPath.Stage.HUNT));
 
 		// Its class change before its shopping: the gatekeeper's fee is not spent on potions first.
 		final ColdLife.Context paid = classContext();
@@ -1761,7 +1844,7 @@ public class LivingTravelTest
 		// A bot that picks a zone is counted there at once, so the next one leaving in the same tick sees it.
 		final ColdLife.Context context = context(0);
 		context.occupancy().put("Near Woods", 3);
-		final ColdBot mover = bot(25, "Near Woods", 600L, 10L, 2L, 0);
+		final ColdBot mover = bot(20, "Near Woods", 600L, 10L, 2L, 0);
 		mover.setActivity(ColdLife.IN_TOWN);
 		mover.setTown("Alpha");
 		mover.setGearTier(2);

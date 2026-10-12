@@ -265,7 +265,7 @@ public final class ZoneChooser
 			// only from that town itself or when no gatekeeper goes there.
 			final Town home = catalog.nearestShoppingTown(zone.center());
 			final boolean homeOnLand = (home != null) && catalog.sameLand(zone.center(), home.arrival());
-			final long fee = !homeOnLand || home.name().equals(town.name()) ? -1L : town.feeTo(home.name());
+			final long fee = !homeOnLand || home.name().equals(town.name()) ? -1L : catalog.feesFrom(town).getOrDefault(home.name(), -1L);
 			if (fee >= 0)
 			{
 				return new Choice(zone, Way.GATEKEEPER, null, fee, home.arrival());
@@ -277,11 +277,14 @@ public final class ZoneChooser
 		{
 			return new Choice(zone, Way.GATEKEEPER, null, direct.fee(), direct.arrival());
 		}
+		// Through any chain of gatekeepers (Gludin Village to Talking Island to Giran, say), the whole trip's fees added up so
+		// the bot knows what it costs before it sets out.
+		final Map<String, Long> fees = catalog.feesFrom(town);
 		Choice best = null;
 		for (Teleport teleport : zone.teleports())
 		{
-			final long hop = town.feeTo(teleport.town());
-			if (hop < 0)
+			final Long hop = fees.get(teleport.town());
+			if (hop == null)
 			{
 				continue;
 			}
