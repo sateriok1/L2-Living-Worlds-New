@@ -720,9 +720,9 @@ public class LivingTravelTest
 		check("it went to Giran for the materials at no gatekeeper cost", richLog.stream().anyMatch(e -> e.text().contains("Goes to Giran") && e.text().contains("gatekeeper 0 adena")));
 		check("only the gatekeeper to the isle was paid", ColdLife.CRAFTING.equals(rich.getActivity()) && (rich.getAdena() >= (100_000L - 18_473L - 5_700L - 2_000L)));
 
-		check("Sateriok goes Fighter, Warrior, Gladiator, Duelist", (ClassPath.next(0, 7L, "Sateriok") == 1) && (ClassPath.next(1, 7L, "Sateriok") == 2) && (ClassPath.next(2, 7L, "Sateriok") == 88));
-		check("SonOfZion's Mystic goes Cleric, Bishop", (ClassPath.next(10, 5L, "SonOfZion") == 15) && (ClassPath.next(15, 5L, "SonOfZion") == 16));
-		check("and his Orc Fighter goes Raider, Destroyer, Titan's line", (ClassPath.next(44, 5L, "SonOfZion") == 45) && (ClassPath.next(45, 5L, "SonOfZion") == 46));
+		check("Sateriok goes Fighter, Warrior, Gladiator, Duelist", (ClassPath.next(0, 7L, "aiSateriok") == 1) && (ClassPath.next(1, 7L, "aiSateriok") == 2) && (ClassPath.next(2, 7L, "aiSateriok") == 88));
+		check("SonOfZion's Mystic goes Cleric, Bishop", (ClassPath.next(10, 5L, "aiSonOfZion") == 15) && (ClassPath.next(15, 5L, "aiSonOfZion") == 16));
+		check("and his Orc Fighter goes Raider, Destroyer, Titan's line", (ClassPath.next(44, 5L, "aiSonOfZion") == 45) && (ClassPath.next(45, 5L, "aiSonOfZion") == 46));
 		int mystics = 0;
 		final Random coin = new Random(11);
 		for (int draw = 0; draw < 200; draw++)
@@ -730,8 +730,8 @@ public class LivingTravelTest
 			mystics += (ColdSeedPlan.zion(coin).classId() == 10) ? 1 : 0;
 		}
 		check("SonOfZion is a Mystic about half the time and an Orc Fighter the rest", (mystics > 60) && (mystics < 140));
-		final ColdSeedPlan.SeedSpec teras = ColdSeedPlan.randomNamed("Teras", new Random(3));
-		check("Teras is born in a starting class of a race", "Teras".equals(teras.name()) && (teras.race() != null) && (ClassPath.next(teras.classId(), 1L) != -1));
+		final ColdSeedPlan.SeedSpec teras = ColdSeedPlan.randomNamed("aiTeras", new Random(3));
+		check("Teras is born in a starting class of a race", "aiTeras".equals(teras.name()) && (teras.race() != null) && (ClassPath.next(teras.classId(), 1L) != -1));
 
 		final ColdBot saved = new ColdBot();
 		saved.setStatsJson(merchant.getStatsJson());

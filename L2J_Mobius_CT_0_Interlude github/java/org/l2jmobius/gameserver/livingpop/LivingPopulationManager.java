@@ -778,7 +778,7 @@ public class LivingPopulationManager
 			classes.merge(startingClassOf(present.getClassId()), 1, Integer::sum);
 		}
 		final List<ColdSeedPlan.SeedSpec> specs = new ArrayList<>(ColdSeedPlan.plan(needed, classes, _random, name -> nameTaken(name, existing)));
-		// Named bots in the first wave: Sateya the Merchant (a dwarf), Sateriok (a human Fighter who becomes a Duelist), SonOfZion (a man, a Mystic who becomes a Bishop or an Orc Fighter who becomes a Titan) and Teras (a random race and class).
+		// Named bots in the first wave: Sateya the Merchant (a dwarf), aiSateriok (a human Fighter who becomes a Duelist), aiSonOfZion (a man, a Mystic who becomes a Bishop or an Orc Fighter who becomes a Titan) and aiTeras (a random race and class).
 		final List<ColdSeedPlan.SeedSpec> named = new ArrayList<>();
 		if (needMerchant)
 		{
