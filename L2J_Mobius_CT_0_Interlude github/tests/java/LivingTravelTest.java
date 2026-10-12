@@ -40,6 +40,7 @@ import org.l2jmobius.gameserver.livingpop.TownStock;
 import org.l2jmobius.gameserver.livingpop.GoalPlanner;
 import org.l2jmobius.gameserver.livingpop.LivingChat;
 import org.l2jmobius.gameserver.livingpop.LivingGear;
+import org.l2jmobius.gameserver.livingpop.LivingPopulationConfig;
 import org.l2jmobius.gameserver.livingpop.LivingRoute;
 import org.l2jmobius.gameserver.livingpop.LivingSupplies;
 import org.l2jmobius.gameserver.livingpop.SkillPlanner;
@@ -96,6 +97,7 @@ public class LivingTravelTest
 		testLivingChat();
 		testClassPath();
 		testClassChange();
+		testClassChangeFirst();
 		testSkillPlanner();
 		testTrainerVisit();
 		testGearRules();
@@ -1219,6 +1221,134 @@ public class LivingTravelTest
 		quick.setClassId(18);
 		runUntil(quick, 0L, instant, new ArrayList<>(), b -> (b.getClassId() != 18));
 		check("no quest hunt when its length is 0", (quick.getClassId() == ClassPath.next(18, quick.getId())) && (quick.getQuest() == null));
+	}
+
+	// A dead-end town (Dead) whose gatekeeper reaches no class master, a hub (Hub) and a far town (Far) with the second masters;
+	// Pricey also has them but costs far more to reach directly than going through the hub.
+	private static final String DEAD_END_XML = "<zones>" //
+		+ "<town name=\"Dead\" x=\"0\" y=\"0\" z=\"0\"><gatekeeper npcId=\"1\" x=\"100\" y=\"0\" z=\"0\"/><grocer npcId=\"2\" x=\"0\" y=\"100\" z=\"0\"/><route town=\"Hub\" fee=\"500\"/><route town=\"Pricey\" fee=\"9000\"/></town>" //
+		+ "<town name=\"Hub\" x=\"100000\" y=\"0\" z=\"0\"><gatekeeper npcId=\"3\" x=\"100100\" y=\"0\" z=\"0\"/><grocer npcId=\"4\" x=\"100000\" y=\"100\" z=\"0\"/><route town=\"Dead\" fee=\"500\"/><route town=\"Far\" fee=\"700\"/></town>" //
+		+ "<town name=\"Far\" x=\"200000\" y=\"0\" z=\"0\"><gatekeeper npcId=\"5\" x=\"200100\" y=\"0\" z=\"0\"/><grocer npcId=\"6\" x=\"200000\" y=\"100\" z=\"0\"/><master script=\"ElfHumanFighterChange2\" npcId=\"7\" x=\"200000\" y=\"300\" z=\"0\"/><route town=\"Hub\" fee=\"700\"/></town>" //
+		+ "<town name=\"Pricey\" x=\"300000\" y=\"0\" z=\"0\"><gatekeeper npcId=\"8\" x=\"300100\" y=\"0\" z=\"0\"/><grocer npcId=\"9\" x=\"300000\" y=\"100\" z=\"0\"/><master script=\"ElfHumanFighterChange2\" npcId=\"10\" x=\"300000\" y=\"300\" z=\"0\"/><route town=\"Dead\" fee=\"9000\"/></town>" //
+		+ "<zone name=\"Dead Hills\" minLevel=\"1\" maxLevel=\"80\"><teleport town=\"Dead\" x=\"5000\" y=\"0\" z=\"0\" fee=\"100\"/><spot x=\"6000\" y=\"0\" z=\"0\"/></zone>" //
+		+ "</zones>";
+
+	/** Free for the low levels, the class change before the shopping, a way to every master, and the class change first of all goals. */
+	private static void testClassChangeFirst() throws Exception
+	{
+		// A way to the master through a hub, by the cheapest route.
+		final ZoneCatalog dead = ZoneCatalog.parse(DEAD_END_XML);
+		check("a town with no master near sends it to the hub", "Hub".equals(dead.masterTown("ElfHumanFighterChange2", dead.town("Dead")).name()));
+		check("the hub sends it on", "Far".equals(dead.masterTown("ElfHumanFighterChange2", dead.town("Hub")).name()));
+		check("a town with the master is its own", "Far".equals(dead.masterTown("ElfHumanFighterChange2", dead.town("Far")).name()));
+		check("no master anywhere is null", (dead.masterTown("NoSuchMaster", dead.town("Dead")) == null) && (dead.masterTown(null, dead.town("Dead")) == null));
+		check("a dear direct route loses to a cheap one through the hub", "Hub".equals(dead.masterTown("ElfHumanFighterChange2", dead.town("Dead")).name()));
+
+		final ColdLife.Params travel = new ColdLife.Params(100.0, 20_000L, 10_000L, 0, 60_000L, 60_000L, 0.0, 8, 300_000L, 2500.0);
+		final long[] quest = new long[]
+		{
+			600_000L,
+			1_200_000L,
+			1_800_000L
+		};
+		final ColdLife.Context deadEnd = new ColdLife.Context(dead, supply(), travel, (level, tier) -> prices(), new HashMap<>(), new Random(7), null, level -> 0L, quest);
+		final ColdBot stuck = bot(45, "Dead Hills", 100_000L, 10L, 2L, 6000);
+		stuck.setClassId(19);
+		stuck.setQuest(new ClassPath.Quest(ClassPath.Stage.TAKE, 20, 0L));
+		final List<DecisionLog.Event> deadLog = new ArrayList<>();
+		runUntil(stuck, 0L, deadEnd, deadLog, b -> (b.getQuest().stage() == ClassPath.Stage.HUNT));
+		check("a bot in a dead-end town still reaches a class master, through the hub", (stuck.getQuest().stage() == ClassPath.Stage.HUNT) && deadLog.stream().anyMatch(e -> e.text().contains("class master in Hub")) && deadLog.stream().anyMatch(e -> e.text().startsWith("Took the quest for Temple Knight from the class master in Far")));
+
+		// Free gatekeepers for the low levels: no money needed for the way to the master.
+		final ColdLife.Params freeTravel = new ColdLife.Params(100.0, 20_000L, 10_000L, 0, 60_000L, 60_000L, 0.0, 8, 300_000L, 2500.0, ColdLife.Params.DEFAULT_SPIRITSHOTS_PER_KILL, 40);
+		final ColdLife.Context free = new ColdLife.Context(catalog(), supply(), freeTravel, (level, tier) -> prices(), new HashMap<>(), new Random(7), null, level -> 0L, quest);
+		final ColdBot poor = bot(30, "Near Woods", 300L, 10L, 2L, 5000);
+		poor.setClassId(19);
+		poor.setQuest(new ClassPath.Quest(ClassPath.Stage.TAKE, 20, 0L));
+		final List<DecisionLog.Event> freeLog = new ArrayList<>();
+		runUntil(poor, 0L, free, freeLog, b -> (b.getQuest().stage() == ClassPath.Stage.HUNT));
+		check("a low-level bot with almost no adena still goes to the master", (poor.getQuest().stage() == ClassPath.Stage.HUNT) && (poor.getAdena() >= 0L) && freeLog.stream().anyMatch(e -> e.text().contains("(free) to go to the class master in Beta")));
+		final ColdBot payer = bot(45, "Near Woods", 300L, 10L, 2L, 5000);
+		payer.setClassId(19);
+		payer.setQuest(new ClassPath.Quest(ClassPath.Stage.TAKE, 20, 0L));
+		runUntil(payer, 0L, free, new ArrayList<>(), b -> (b.getQuest().stage() == ClassPath.Stage.HUNT));
+		check("above the free level the same bot still has to afford the gatekeeper", payer.getQuest().stage() == ClassPath.Stage.TAKE);
+
+		// Its class change before its shopping: the gatekeeper's fee is not spent on potions first.
+		final ColdLife.Context paid = classContext();
+		final ColdBot shopper = bot(40, "Near Woods", 1_500L, 0L, 0L, 5000);
+		shopper.setClassId(19);
+		shopper.setQuest(new ClassPath.Quest(ClassPath.Stage.TAKE, 20, 0L));
+		runUntil(shopper, 0L, paid, new ArrayList<>(), b -> (b.getQuest().stage() == ClassPath.Stage.HUNT));
+		check("it sees the class master before it shops", shopper.getQuest().stage() == ClassPath.Stage.HUNT);
+
+		// The class change outranks every other goal.
+		final GoalPlanner.View noPotions = new GoalPlanner.View(20, 20_000L, 0L, 5000L, 2L, 2, true, "Near Woods", 10, 20, null, "take the class change quest for Elven Knight", null);
+		check("it outranks a bot with no potions", "class".equals(GoalPlanner.plan(noPotions, prices(), supply()).chosen().key()));
+		final GoalPlanner.View tooWeak = new GoalPlanner.View(5, 20_000L, 10L, 5000L, 2L, 2, true, "Near Woods", 10, 20, "Newbie Field", "take the class change quest for Elven Knight", null);
+		check("and one too low for its zone", "class".equals(GoalPlanner.plan(tooWeak, prices(), supply()).chosen().key()));
+
+		// Every line gets through all three changes on the real map, whatever it earns.
+		final java.nio.file.Path real = java.nio.file.Path.of("dist/game/modules/living-population/data/zones.xml");
+		if (java.nio.file.Files.exists(real))
+		{
+			final ZoneCatalog map = ZoneCatalog.load(real);
+			final TravelConfig config = TravelConfig.defaults();
+			int finished = 0;
+			int runs = 0;
+			for (int base : new int[]
+			{
+				0,
+				10,
+				18,
+				25,
+				31,
+				38,
+				44,
+				49,
+				53
+			})
+			{
+				for (double wealth : new double[]
+				{
+					1.0,
+					10.0
+				})
+				{
+					for (int seed = 1; seed <= 2; seed++)
+					{
+						runs++;
+						final ColdLife.Context life = new ColdLife.Context(map, config.supplyParams(LivingPopulationConfig.defaults()), config.travelParams(), (level, tier) -> prices(), new HashMap<>(), new Random(base * 31L + seed), null, level -> 0L, config.classQuestParams());
+						final ColdBot walker = bot(15, null, 5_000L, 30L, 2L, 0);
+						walker.setId(100 + base);
+						walker.setRace("Human");
+						walker.setClassId(base);
+						ColdLife.adoptStartingZone(walker, map);
+						final List<DecisionLog.Event> noise = new ArrayList<>();
+						long now = 0L;
+						for (int step = 0; (step < 1200) && ((ClassPath.tier(walker.getClassId()) < 3) || (walker.getQuest() != null)); step++)
+						{
+							now += 300_000L;
+							if (ColdLife.isHunting(walker.getActivity()))
+							{
+								walker.setLoot(walker.getLoot() + Math.round(walker.getLevel() * walker.getLevel() * wealth / 12.0));
+								if ((walker.getLevel() < 80) && ((step % 8) == 0))
+								{
+									walker.setLevel(walker.getLevel() + 1);
+								}
+							}
+							ColdLife.advance(walker, now, 300_000L, life, noise);
+							noise.clear();
+						}
+						if ((ClassPath.tier(walker.getClassId()) >= 3) && (walker.getQuest() == null))
+						{
+							finished++;
+						}
+					}
+				}
+			}
+			check("every class line finishes its three class changes on the real map (" + finished + " of " + runs + ")", finished == runs);
+		}
 	}
 
 	/** A small skill tree: a free skill, two levels of one skill, a spellbook skill, an unsold book, and a level 30 one. */

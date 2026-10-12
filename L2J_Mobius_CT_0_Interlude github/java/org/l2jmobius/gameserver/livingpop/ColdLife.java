@@ -415,7 +415,7 @@ public final class ColdLife
 				{
 					learnSkills(bot, town, context, events);
 				}
-				leaveTown(bot, now, context, events);
+				finishErrands(bot, now, context, events); // the shopping it put off to see the master first
 				break;
 			}
 			case TRAINER:
@@ -763,6 +763,12 @@ public final class ColdLife
 			}
 		}
 		sellOldShots(bot, town, context, events);
+
+		// Its class change comes before any shopping, so what it buys cannot eat the money for the way to the class master.
+		if (visitClassMaster(bot, town, now, context, events))
+		{
+			return;
+		}
 		if (town.hasGrocer())
 		{
 			final SupplyPlanner.Prices listed = context.priceBook().prices(bot.getLevel(), bot.getGearTier(), bot.getClassId());
@@ -1166,8 +1172,9 @@ public final class ColdLife
 		{
 			return "no " + what + " it can reach";
 		}
-		// The fee leaves at least the reserve floor, the money it leaves the master's town with for the way back out.
-		if ((masterTown != town) && ((town.feeTo(masterTown.name()) + context.supply().reserveFloor()) > purse(bot)))
+		// A bot the gatekeepers teleport for free needs no money for the way. Otherwise the fee leaves at least the reserve
+		// floor, the money it leaves the master's town with for the way back out.
+		if ((masterTown != town) && !freeTeleport(bot, context) && ((town.feeTo(masterTown.name()) + context.supply().reserveFloor()) > purse(bot)))
 		{
 			return "cannot afford the gatekeeper to " + masterTown.name();
 		}
@@ -1292,8 +1299,14 @@ public final class ColdLife
 			events.add(new DecisionLog.Event("nomaster-" + script, "No " + what + " it can reach from " + town.name()));
 			return false;
 		}
-		final long fee = town.feeTo(other.name());
-		if ((fee + context.supply().reserveFloor()) > bot.getAdena())
+		final long listed = town.feeTo(other.name());
+		if (listed < 0L)
+		{
+			events.add(new DecisionLog.Event("nomaster-" + script, "No " + what + " it can reach from " + town.name()));
+			return false;
+		}
+		final long fee = freeTeleport(bot, context) ? 0L : listed;
+		if ((fee > 0L) && ((fee + context.supply().reserveFloor()) > bot.getAdena()))
 		{
 			events.add(new DecisionLog.Event("masterfee-" + other.name(), "Cannot afford the gatekeeper to " + other.name() + " for its " + what + " yet"));
 			return false;
@@ -1302,7 +1315,7 @@ public final class ColdLife
 		bot.setTown(other.name());
 		bot.setActivity(TO_TOWN);
 		bot.setLeg(TravelLeg.stay(other.arrival(), now, context.travel().escapeCastMs()));
-		events.add(new DecisionLog.Event(null, "Paid the " + town.name() + " gatekeeper " + DecisionLog.num(fee) + " adena to go to the " + what + " in " + other.name()));
+		events.add(new DecisionLog.Event(null, (fee > 0L) ? ("Paid the " + town.name() + " gatekeeper " + DecisionLog.num(fee) + " adena to go to the " + what + " in " + other.name()) : ("Took the " + town.name() + " gatekeeper (free) to go to the " + what + " in " + other.name())));
 		return true;
 	}
 
