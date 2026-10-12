@@ -24,6 +24,8 @@ import org.l2jmobius.gameserver.config.PlayerConfig;
 import org.l2jmobius.gameserver.handler.IVoicedCommandHandler;
 import org.l2jmobius.gameserver.livingpop.LivingPopulationConfig;
 import org.l2jmobius.gameserver.livingpop.LivingPopulationManager;
+import org.l2jmobius.gameserver.livingpop.RaidDirector;
+import org.l2jmobius.gameserver.livingpop.RaidPlanner;
 import org.l2jmobius.gameserver.livingpop.ShotCrafting;
 import org.l2jmobius.gameserver.livingpop.TravelConfig;
 import org.l2jmobius.gameserver.livingpop.ZoneCombat;
@@ -167,6 +169,10 @@ public class LivingPopulationModule implements GameModule
 		LivingPopulationManager.getInstance().setTownStockHalfLife(context.config().getDouble("TownStockHalfLifeHours", 6.0));
 		LivingPopulationManager.getInstance().setMerchant(context.config().getBoolean("MerchantCrafting", true)
 			? new LivingPopulationManager.MerchantConfig(new ShotCrafting.Prices(context.config().getLong("MerchantSoulOrePrice", 275L), context.config().getLong("MerchantSpiritOrePrice", 440L), context.config().getLong("MerchantDCrystalCost", 596L), context.config().getLong("MerchantCCrystalCost", 2799L)), Math.max(1, context.config().getInt("MerchantCraftMinutes", 30)) * 60_000L, Math.max(0.1, context.config().getDouble("MerchantHoursOfStock", 2.0)), Math.max(1L, context.config().getLong("MerchantMaxCrafts", 100L)), Math.max(1, context.config().getInt("MerchantDemandHours", 6)), Math.max(0.0, context.config().getDouble("MerchantMaxMarkup", 0.5)))
+			: null);
+		LivingPopulationManager.getInstance().setRaids(context.config().getBoolean("RaidParties", true)
+			? new RaidDirector.Config(Math.max(1, context.config().getInt("RaidMinLevel", 20)), Math.max(1, context.config().getInt("RaidMaxLevel", 40)), Math.max(0, context.config().getInt("RaidLevelsBelow", 5)), Math.max(0, context.config().getInt("RaidLevelsAbove", 10)), Math.max(1, context.config().getInt("RaidCheckMinutes", 5)) * 60_000L, Math.max(0, context.config().getInt("RaidGatherMinutes", 5)) * 60_000L, Math.max(1, context.config().getInt("RaidRetryMinutes", 60)) * 60_000L,
+				new RaidPlanner.Params(Math.max(2, context.config().getInt("RaidMinParty", 6)), Math.max(2, context.config().getInt("RaidMaxParty", 9)), Math.max(0.0, Math.min(1.0, context.config().getDouble("RaidMinWinChance", 0.9))), 70.0, Math.max(0.1, context.config().getDouble("RaidBossBurst", 1.5)), 1.8, 240.0, 1800.0))
 			: null);
 		LivingPopulationManager.getInstance().setSelfHeal(context.config().getBoolean("SelfHeal", true));
 		LivingPopulationManager.getInstance().setStartingBuffs(context.config().getBoolean("StartingBuffs", true));

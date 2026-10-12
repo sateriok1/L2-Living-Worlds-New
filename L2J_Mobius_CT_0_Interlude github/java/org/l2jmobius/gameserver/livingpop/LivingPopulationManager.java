@@ -275,6 +275,16 @@ public class LivingPopulationManager
 		FakePlayerStoreFactory.setShopkeeperItems((merchant == null) ? Set.of() : SHOT_ITEMS); // only SatDShots and SatCShots sell the Merchant's shots
 	}
 
+	private volatile RaidDirector.Config _raidConfig; // null = no raid parties
+	private volatile RaidDirector _raids;
+	private boolean _raidBossesLoaded;
+
+	/** @param config the raid party settings, or null for no raids */
+	public void setRaids(RaidDirector.Config config)
+	{
+		_raidConfig = config;
+	}
+
 	private final Map<String, Npc> _shopkeepers = new HashMap<>(); // shop name to its phantom, while it stands in the world
 
 	/**
@@ -666,6 +676,9 @@ public class LivingPopulationManager
 
 		_stockSaving = _townStockDao.load(_townStock);
 		loadShotDemand();
+		_raids = (_raidConfig == null) ? null : new RaidDirector(_random, _raidConfig);
+		_raidBossesLoaded = false;
+		loadRaidTimers();
 		_handoff.setTownStock(_townStock);
 		_lastStockSweep = System.currentTimeMillis(); // downtime does not clear stock
 		FakePlayerStoreFactory.setSupply(new TownShops(_townStock, () -> (_catalog == null) ? List.of() : _catalog.towns(), this::payOwner, this::shotFloor));
@@ -709,6 +722,10 @@ public class LivingPopulationManager
 
 		// The first bots were numbered (Human000 ...): give them real names, characters included.
 		renamePlaceholders(loaded);
+		if (_raids != null)
+		{
+			_raids.recover(_bots); // a raid does not survive a restart: its party goes back to hunting
+		}
 
 		// Removals asked for while the server was down, before any new bot is born.
 		_populationTarget = Math.max(0, config.populationSize());
@@ -775,6 +792,7 @@ public class LivingPopulationManager
 			_townStockDao.save(_townStock);
 		}
 		saveShotDemand();
+		saveRaidTimers();
 		// Clear in-memory state so a later start() reloads cleanly instead of double-loading the population.
 		_bots.clear();
 		_removals.clear();
@@ -1060,6 +1078,11 @@ public class LivingPopulationManager
 		final Map<String, Integer> occupancy = (travel || (_respawnLimit && combat.enabled())) ? zoneOccupancy() : null;
 		final ColdLife.Context life = travel ? new ColdLife.Context(_catalog, _travelConfig.supplyParams(_config), _travelConfig.travelParams(), priceBook, occupancy, _random, _travelConfig.riskParams(), expToNextLevel, _travelConfig.classQuestParams(), _travelConfig.skillTraining() ? this::skillTree : null, _gear, combat.enabled() ? combat : null, (_merchant == null) ? null : new MerchantWorkshop(_merchant, combat.enabled() ? combat.tierStep() : _config.gearTierLevelStep())) : null;
 		_handoff.setLife(life); // hot bots make the same decisions, acted out by their live characters
+		if ((_raids != null) && (life != null) && (_gear != null) && combat.enabled())
+		{
+			ensureRaidBosses();
+			_raids.tick(now, _bots, life, new RaidHost(combat));
+		}
 
 		// Resolve up to resolveBatch due bots, starting from a rotating cursor so a population larger than the batch is
 		// advanced fairly round-robin. (Starting from index 0 every tick would let the first resolveBatch bots, which
@@ -1882,6 +1905,10 @@ public class LivingPopulationManager
 			syncShopkeepers();
 			saveTownStock();
 			saveShotDemand();
+			if ((_raids != null) && _raids.dirty())
+			{
+				saveRaidTimers();
+			}
 		}
 		catch (Exception e)
 		{
@@ -1931,6 +1958,153 @@ public class LivingPopulationManager
 	private Path shotDemandFile()
 	{
 		return Path.of(_config.snapshotFile()).resolveSibling("LivingPopulation-shotdemand.txt");
+	}
+
+	private Path raidTimersFile()
+	{
+		return Path.of(_config.snapshotFile()).resolveSibling("LivingPopulation-raids.txt");
+	}
+
+	private void loadRaidTimers()
+	{
+		try
+		{
+			if ((_raids != null) && Files.exists(raidTimersFile()))
+			{
+				_raids.decode(Files.readString(raidTimersFile(), StandardCharsets.UTF_8));
+			}
+		}
+		catch (Exception e)
+		{
+			LOGGER.log(Level.WARNING, "LivingPopulation: could not read the raid boss timers: " + e.getMessage(), e);
+		}
+	}
+
+	private void saveRaidTimers()
+	{
+		try
+		{
+			if (_raids != null)
+			{
+				Files.write(raidTimersFile(), _raids.encode(System.currentTimeMillis()).getBytes(StandardCharsets.UTF_8));
+			}
+		}
+		catch (Exception e)
+		{
+			LOGGER.log(Level.WARNING, "LivingPopulation: could not save the raid boss timers: " + e.getMessage(), e);
+		}
+	}
+
+	/** Reads the raid bosses of the configured levels from the game data, once: their stats, drops and spawn. */
+	private void ensureRaidBosses()
+	{
+		if (_raidBossesLoaded)
+		{
+			return;
+		}
+		final RaidDirector.Config config = _raidConfig;
+		final Map<Integer, org.l2jmobius.gameserver.model.spawns.Spawn> spawns = org.l2jmobius.gameserver.managers.RaidBossSpawnManager.getInstance().getSpawns();
+		if ((spawns == null) || spawns.isEmpty())
+		{
+			return; // the world has not loaded its bosses yet; look again next tick
+		}
+		_raidBossesLoaded = true;
+		final List<RaidDirector.BossInfo> bosses = new ArrayList<>();
+		for (NpcTemplate template : NpcData.getInstance().getTemplates(t -> t.isType("RaidBoss") && (t.getLevel() >= config.minLevel()) && (t.getLevel() <= config.maxLevel())))
+		{
+			final org.l2jmobius.gameserver.model.spawns.Spawn spawn = spawns.get(template.getId());
+			if (spawn == null)
+			{
+				continue;
+			}
+			final List<RaidLoot.Group> groups = new ArrayList<>();
+			if (template.getDropGroups() != null)
+			{
+				for (DropGroupHolder group : template.getDropGroups())
+				{
+					final List<RaidLoot.Entry> entries = new ArrayList<>();
+					for (DropHolder drop : group.getDropList())
+					{
+						entries.add(new RaidLoot.Entry(drop.getItemId(), drop.getChance(), drop.getMin(), drop.getMax()));
+					}
+					groups.add(new RaidLoot.Group(group.getChance(), entries));
+				}
+			}
+			if (template.getDropList() != null)
+			{
+				for (DropHolder drop : template.getDropList())
+				{
+					groups.add(new RaidLoot.Group(drop.getChance(), List.of(new RaidLoot.Entry(drop.getItemId(), 100.0, drop.getMin(), drop.getMax()))));
+				}
+			}
+			final long minMs = spawn.getRespawnMinDelay();
+			final long maxMs = spawn.getRespawnMaxDelay();
+			bosses.add(new RaidDirector.BossInfo(template.getId(), template.getName(), template.getLevel(), template.getBaseHpMax(), template.getBasePDef(), template.getBaseMDef(), template.getBasePAtk(), template.getBaseMAtk(), template.getBasePAtkSpd(), new ZoneCatalog.Point(spawn.getX(), spawn.getY(), spawn.getZ()), (minMs + maxMs) / 2, Math.max(0L, (maxMs - minMs) / 2), groups, template.getExp(), template.getSP()));
+		}
+		_raids.setBosses(bosses);
+		LOGGER.info("LivingPopulation: " + bosses.size() + " raid bosses of level " + config.minLevel() + " to " + config.maxLevel() + " are open to cold raid parties.");
+	}
+
+	/** What the raid director needs from the manager. */
+	private final class RaidHost implements RaidDirector.Host
+	{
+		private final ZoneCombat _model;
+
+		RaidHost(ZoneCombat model)
+		{
+			_model = model;
+		}
+
+		@Override
+		public RaidPlanner.Member member(ColdBot bot, RaidDirector.BossInfo boss, ColdLife.Context life)
+		{
+			if (!ColdLife.isHunting(bot.getActivity()) || (bot.getEscapes() < 1L) || ShotCrafting.MERCHANT.equalsIgnoreCase(bot.getName()))
+			{
+				return null; // a raid is left from hunting, with a Scroll of Escape to come home with
+			}
+			final PlayerTemplate template = PlayerTemplateData.getInstance().getTemplate(bot.getClassId());
+			if (template == null)
+			{
+				return null;
+			}
+			final int level = bot.getLevel();
+			final ZoneCombat.Stats stats = ColdLife.statsOf(bot, life.gear(), _model);
+			final ZoneCombat.ZoneStats zone = new ZoneCombat.ZoneStats(boss.name(), boss.level(), boss.level(), boss.level(), boss.hp(), boss.pDef(), boss.mDef(), boss.pAtk(), boss.mAtk(), 0.0, 1, 0.0, 0.0, 0.0, boss.atkSpeed(), 0.0, 0.0);
+			final double skills = ZoneCombat.skillFraction(skillTree(bot.getClassId()), SkillPlanner.decode(bot.getSkills()), level);
+			final int seat = ZoneCombat.seatOf(bot.getClassId());
+			final double dps = ((seat == 0) || (seat == 1)) ? _model.raidDps(zone, bot.getClassId(), level, stats, skills, (bot.getSoulshots() > 0L) ? 1.0 : 0.0, usesBlessed(bot)) : 0.0;
+			final RaidPlanner.Seat role = (seat == 0) ? RaidPlanner.Seat.TANK : (seat == 3) ? RaidPlanner.Seat.HEALER : (seat == 2) ? RaidPlanner.Seat.BUFFER : RaidPlanner.Seat.DAMAGE;
+			return new RaidPlanner.Member(bot.getId(), role, dps, template.getBaseHpMax(level), stats.pDef(), (seat == 3) ? _model.raidHealPerSecond(bot.getClassId(), level, stats.attack()) : 0.0, (seat == 2) ? _model.raidBuff(bot.getClassId(), level) : 1.0);
+		}
+
+		@Override
+		public long value(int itemId)
+		{
+			final ItemTemplate item = ItemData.getInstance().getTemplate(itemId);
+			return (item == null) ? 0L : Math.max(0L, item.getReferencePrice());
+		}
+
+		@Override
+		public void stock(String town, long botId, int itemId, long count)
+		{
+			_townStock.add(town, botId, itemId, count);
+		}
+
+		@Override
+		public void experience(ColdBot bot, long exp, long sp, List<DecisionLog.Event> events)
+		{
+			final ExperienceData experience = ExperienceData.getInstance();
+			final IntToLongFunction toNext = level -> Math.max(1L, experience.getExpForLevel(level + 1) - experience.getExpForLevel(level));
+			final int before = bot.getLevel();
+			final ColdProgression.Progress progress = ColdProgression.resolve(before, bot.getExpIntoLevel(), 60_000L, Math.min(_config.maxLevel(), experience.getMaxLevel()), toNext, level -> exp);
+			bot.setLevel(progress.level());
+			bot.setExpIntoLevel(progress.expIntoLevel());
+			bot.setSp(Math.min(ColdEconomy.MAX_ADENA, bot.getSp() + sp));
+			if (progress.level() > before)
+			{
+				events.add(new DecisionLog.Event(null, "Reached level " + progress.level() + " from the raid"));
+			}
+		}
 	}
 
 	private void loadShotDemand()

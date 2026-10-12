@@ -62,6 +62,8 @@ public final class ColdLife
 	public static final String CRAFT_RETURN = "craft_return";
 	/** A Merchant paying the gatekeeper to the town it sells its shots in. */
 	public static final String DELIVERING = "delivering";
+	/** A member of a raid party, away from hunting until the raid director ends the raid. */
+	public static final String RAIDING = "raiding";
 	/** Where the materials are bought. */
 	public static final String MATERIALS_TOWN = "Giran";
 	/** The zone a Merchant crafts in. */
@@ -424,6 +426,10 @@ public final class ColdLife
 				leaveTown(bot, now, context, events);
 				break;
 			}
+			case RAIDING:
+			{
+				break; // the raid director ends the raid and sends the party home
+			}
 			case CRAFTING:
 			{
 				finishCrafting(bot, now, context, events);
@@ -676,6 +682,27 @@ public final class ColdLife
 		bot.setActivity(DEAD);
 		bot.setLeg(TravelLeg.stay(town.arrival(), now, risk.recoverMs()));
 		return true;
+	}
+
+	/**
+	 * A member of a raid party died in the fight: the experience a death costs, then it recovers in the town the party came back to.
+	 * @param bot the bot
+	 * @param town the town it recovers in
+	 * @param bossName the boss
+	 * @param now when
+	 * @param context the shared context
+	 * @param events where the decision is logged
+	 */
+	static void diedInRaid(ColdBot bot, Town town, String bossName, long now, Context context, List<DecisionLog.Event> events)
+	{
+		final long lost = Math.min(bot.getExpIntoLevel(), Math.round(context.expToNext().applyAsLong(bot.getLevel()) * (ColdRisk.expLossPercent(bot.getLevel()) / 100.0)));
+		bot.setExpIntoLevel(bot.getExpIntoLevel() - lost);
+		bot.setDeaths(bot.getDeaths() + 1);
+		events.add(new DecisionLog.Event(null, "Died fighting " + bossName + " and lost " + DecisionLog.num(lost) + " exp. Recovers in " + town.name()));
+		moveTo(bot, town.arrival());
+		bot.setTown(town.name());
+		bot.setActivity(DEAD);
+		bot.setLeg(TravelLeg.stay(town.arrival(), now, context.risk().recoverMs()));
 	}
 
 	/**
@@ -939,6 +966,10 @@ public final class ColdLife
 	 */
 	public static boolean staysCold(ColdBot bot, Context context)
 	{
+		if (RAIDING.equals(bot.getActivity()))
+		{
+			return true; // a raid party is cold from gathering to the last drop
+		}
 		if ((context == null) || (context.workshop() == null) || !isCrafter(bot.getClassId()) || !ShotCrafting.MERCHANT.equalsIgnoreCase(bot.getName()))
 		{
 			return false;
@@ -1966,12 +1997,12 @@ public final class ColdLife
 		return (best != null) ? best : town;
 	}
 
-	private static Point point(ColdBot bot)
+	static Point point(ColdBot bot)
 	{
 		return new Point(bot.getX(), bot.getY(), bot.getZ());
 	}
 
-	private static void moveTo(ColdBot bot, Point point)
+	static void moveTo(ColdBot bot, Point point)
 	{
 		bot.setX(point.x());
 		bot.setY(point.y());

@@ -198,6 +198,17 @@ An Artisan or Warsmith cold bot supplies the D and C soulshots and blessed spiri
 - **Outgrown shots.** When the shots a bot fires change (a weapon upgrade, a class change), the shots it still holds are no use. D and C shots go back to the shop that sells them: they leave the bot, go onto the shelf under Sateya's name, the bot is paid the price the shop sells at now, and that adena comes out of Sateya's purse (it cannot go below zero). Any other old shots (no grade and the like) are sold to a vendor at half the reference price. Every sale in SatDShots or SatCShots pays Sateya, whether the shots were her crafts or buy-backs.
 - **Staying cold.** Sateya is a live character only while she hunts or walks to her zone: her town business and trips run cold, so a player walking up to her cannot break one. If she is live when she leaves the hunt, she cools.
 
+## Raid parties
+
+Raid bosses are hunted by the cold bots themselves, no bot decides it. Every `RaidCheckMinutes` the module looks at each raid boss of `RaidMinLevel` to `RaidMaxLevel` that is up, highest level first. It builds a team from the cold bots that are hunting, have a Scroll of Escape and are `RaidLevelsBelow` below to `RaidLevelsAbove` above the boss's level: the sturdiest tank, the best healer and buffer, then the strongest damage dealers, the smallest party of `RaidMinParty` to `RaidMaxParty` that clears `RaidMinWinChance`. If none does, the boss waits.
+
+- **The fight** (`RaidPlanner`): the team's damage (each class's rotation against the boss's defence, from the zone combat model, with shots and the buffers' multiple) over the boss's HP gives the fight length. The tank takes the boss's hits (its attack over the tank's P.Def, times `RaidBossBurst`) and the healer heals, with its mana lasting four minutes at full strength. The team wins if the tank outlasts the fight; fights longer than 30 minutes fail. The win chance runs from 0 at 60% of the fight length to 1 at 140%.
+- **The run**: the party leaves hunting (activity `raiding`, cold the whole time), gathers `RaidGatherMinutes`, walks to the boss and fights. When it ends, every member reads a Scroll of Escape to the nearest town and runs its normal errands there.
+- **The loot** (`RaidLoot`): the boss's real drop list is rolled once at the server's raid rates. Adena is split equally. The items are split as evenly in value as whole items allow, as cooperative players would: the most valuable item goes to whoever holds the least so far. Each member's items go into the town stock under the member's own id, so they sell in the shops and pay the owner. Experience and SP are shared with the party bonus.
+- **Deaths**: on a win a member dies with a chance that grows as the margin shrinks; on a wipe all die, with the usual experience loss and recovery. After a wipe the boss is left alone for `RaidRetryMinutes`.
+- **Timers**: a boss killed by a party is away for its own respawn time (the spawn table's delay and random). The timers are saved in `LivingPopulation-raids.txt` next to the snapshot. A raid does not survive a restart: its party goes back to hunting.
+- **The world boss is not touched.** A player can still fight the same boss; the cold respawn clock is separate.
+
 ## Named bots
 
 Titles: Sateya "The Merchant", aiSateriok "Dev God", aiSonOfZion "Bot Torturer", aiTeras "Administrator" (shown while they are live characters).

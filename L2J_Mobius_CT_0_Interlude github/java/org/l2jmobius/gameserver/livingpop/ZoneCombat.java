@@ -627,6 +627,43 @@ public final class ZoneCombat
 		return (roleOf(classId) == Role.TANK) ? 0 : 1;
 	}
 
+	/** @return the seat a class takes in a party: 0 tank, 1 damage dealer, 2 buffer, 3 healer */
+	public static int seatOf(int classId)
+	{
+		return slotOf(classId);
+	}
+
+	/**
+	 * A damage dealer's sustained damage a second against one big target (a raid boss), from the class's rotation over the
+	 * longest window, with the shots it fires. Buffs are not in it (see {@link #raidBuff}).
+	 * @param boss the boss as a one-monster zone (its HP, P.Def and M.Def)
+	 * @return damage a second, 0 when the model is off
+	 */
+	public double raidDps(ZoneStats boss, int classId, int level, Stats stats, double skillFraction, double shotFraction, boolean blessed)
+	{
+		if (!_params.enabled())
+		{
+			return 0.0;
+		}
+		final Role role = roleOf(classId);
+		final double self = (stats.selfBuffs() < 0) ? -1.0 : stats.selfBuffs();
+		return rotationDps(boss, role, classId, level, stats.attack(), skillFraction, self, ROTATION_WINDOWS.length - 1) * shotDamage(role, shotFraction, blessed);
+	}
+
+	/** @return the damage multiple a buffer class gives a melee party at the level (1 for a class that is not a buffer) */
+	public double raidBuff(int classId, int level)
+	{
+		final String line = BUFFER_OF.get(classId);
+		return (line == null) ? 1.0 : partyBuff(line, Role.MELEE, 0, level);
+	}
+
+	/** @return the HP a second a healer class heals in a long fight with the heals it has learned at the level (0 without data) */
+	public double raidHealPerSecond(int classId, int level, double mAtk)
+	{
+		final double seconds = 60.0;
+		return healPlan(_rotationLine.get(classId), level, mAtk, false, false, seconds, 1.0e9, 0.0)[0] / seconds;
+	}
+
 	private double partyBuff(String buffer, Role role, int kind, int level)
 	{
 		final double[][] table = (_partyBuffs.get(buffer) == null) ? null : _partyBuffs.get(buffer).get(role);
