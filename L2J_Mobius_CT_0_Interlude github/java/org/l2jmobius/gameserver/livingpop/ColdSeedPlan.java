@@ -87,8 +87,24 @@ public final class ColdSeedPlan
 
 	private static final int NAME_ATTEMPTS = 200;
 
+	/** The owner's name: a human Fighter who always becomes a Duelist, born with the first wave. */
+	public static final String OWNER = "Sateriok";
+	/** A friend's name: a bot of a random race and class, born with the first wave. */
+	public static final String FRIEND = "Teras";
+
 	private ColdSeedPlan()
 	{
+	}
+
+	/**
+	 * @param name the name to give
+	 * @param random the source
+	 * @return a new bot of that name in a random starting class
+	 */
+	public static SeedSpec randomNamed(String name, Random random)
+	{
+		final Object[] pick = BASE_CLASSES[random.nextInt(BASE_CLASSES.length)];
+		return new SeedSpec((String) pick[0], (int) pick[1], name);
 	}
 
 	/**

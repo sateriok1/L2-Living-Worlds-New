@@ -251,7 +251,19 @@ public final class ColdLife
 
 		/** @return the most crafts one trip makes */
 		long maxCrafts();
+
+		/** @return the shot item this bot fires (by its class and weapon grade) */
+		int shotFor(ColdBot bot);
+
+		/** @return what a shot costs in the shops of a town now */
+		long shotPrice(String town, int shotItemId);
+
+		/** Takes shots out of a town's shops for a buyer and pays their owner what the buyer pays. @return whether that many were there */
+		boolean buyShots(String town, int shotItemId, long count, long unitPrice);
 	}
+
+	/** The price of a shot at the grocer when the shop sells it instead: too high to buy (a bot buys D and better shots only from the Merchant's shops). */
+	private static final long NO_GROCER_SHOTS = Long.MAX_VALUE / 4L;
 
 	/**
 	 * @param activity an activity label
@@ -730,7 +742,9 @@ public final class ColdLife
 		}
 		if (town.hasGrocer())
 		{
-			final SupplyPlanner.Prices prices = context.priceBook().prices(bot.getLevel(), bot.getGearTier(), bot.getClassId());
+			final SupplyPlanner.Prices listed = context.priceBook().prices(bot.getLevel(), bot.getGearTier(), bot.getClassId());
+			// The grocer does not sell D and better shots: those come from the Merchant's shops, below.
+			final SupplyPlanner.Prices prices = buysShotsInShops(bot, context) ? new SupplyPlanner.Prices(listed.potion(), NO_GROCER_SHOTS, listed.escape(), listed.nextTier()) : listed;
 			final SupplyPlanner.Params supply = supplyFor(bot, context);
 			final SupplyPlanner.Purchase bought = SupplyPlanner.shop(bot.getLevel(), bot.getAdena(), bot.getEscapes(), bot.getPotions(), bot.getSoulshots(), bot.getGearTier(), bot.isRewardClaimed(), prices, supply);
 			if (bought.any())
@@ -749,6 +763,13 @@ public final class ColdLife
 			{
 				events.add(new DecisionLog.Event(null, "Nothing it can afford in " + town.name() + " right now"));
 			}
+		}
+
+		// D and better shots come from the Merchant's shops, in Gludio (D) and Giran (C).
+		if (shopForShots(bot, town, now, context, events))
+		{
+			bot.setShoppedAt(now);
+			return;
 		}
 
 		// A Merchant puts its adena into shots for the hunters' unmet demand before it spends any on its own gear.
@@ -780,6 +801,79 @@ public final class ColdLife
 			return;
 		}
 		leaveTown(bot, now, context, events);
+	}
+
+	/** @return whether this bot fires shots only the Merchant makes (D grade and better) */
+	private static boolean buysShotsInShops(ColdBot bot, Context context)
+	{
+		final Workshop shop = context.workshop();
+		return (shop != null) && (ShotCrafting.byShot(shop.shotFor(bot)) != null);
+	}
+
+	/**
+	 * Buys the shots a bot fires from the Merchant's shop when it stands in the town that sells them, and goes to that town
+	 * by gatekeeper when it is somewhere else and the shop holds enough to be worth the trip. No shots are made from
+	 * nothing: they leave the shop's stock and the adena goes to the Merchant.
+	 * @return whether it set off for the shop's town
+	 */
+	private static boolean shopForShots(ColdBot bot, Town town, long now, Context context, List<DecisionLog.Event> events)
+	{
+		final Workshop shop = context.workshop();
+		if (shop == null)
+		{
+			return false;
+		}
+		final int shot = shop.shotFor(bot);
+		final ShotCrafting.Recipe recipe = ShotCrafting.byShot(shot);
+		if (recipe == null)
+		{
+			return false;
+		}
+		final SupplyPlanner.Params supply = supplyFor(bot, context);
+		final long wanted = SupplyPlanner.soulshotTarget(bot.isRewardClaimed(), supply) - bot.getSoulshots();
+		final long minimum = Math.max(1L, SupplyPlanner.soulshotMinPurchase(bot.isRewardClaimed(), supply));
+		if (wanted < minimum)
+		{
+			return false;
+		}
+		final long budget = SupplyPlanner.spendable(bot.getAdena(), SupplyPlanner.reserve(bot.getLevel(), bot.getAdena(), supply));
+		final String saleTown = recipe.saleTown();
+		final long price = Math.max(1L, shop.shotPrice(saleTown, shot));
+		final long available = shop.onSale(saleTown, shot);
+		if (saleTown.equals(town.name()))
+		{
+			final long count = Math.min(wanted, Math.min(available, budget / price));
+			if ((count < minimum) || !shop.buyShots(saleTown, shot, count, price))
+			{
+				if (available < minimum)
+				{
+					events.add(new DecisionLog.Event("noshots-" + saleTown, "The shot shop in " + saleTown + " has none to sell. Hunts without shots"));
+				}
+				return false;
+			}
+			bot.setAdena(bot.getAdena() - (count * price));
+			bot.setSoulshots(bot.getSoulshots() + count);
+			events.add(new DecisionLog.Event(null, "Bought " + DecisionLog.num(count) + " shots from the shop in " + saleTown + " for " + DecisionLog.num(count * price) + " adena (" + DecisionLog.num(price) + " each)"));
+			return false;
+		}
+		final Town dest = context.catalog().town(saleTown);
+		final long listedFee = (dest == null) ? -1L : town.feeTo(saleTown);
+		if (listedFee < 0L)
+		{
+			return false;
+		}
+		final long fee = freeTeleport(bot, context) ? 0L : listedFee;
+		final long count = Math.min(wanted, Math.min(available, Math.max(0L, budget - fee) / price));
+		if (count < minimum)
+		{
+			return false;
+		}
+		bot.setAdena(bot.getAdena() - fee);
+		bot.setTown(dest.name());
+		bot.setActivity(TO_TOWN);
+		bot.setLeg(TravelLeg.stay(dest.arrival(), now, context.travel().escapeCastMs()));
+		events.add(new DecisionLog.Event(null, "Goes to " + dest.name() + " for shots (gatekeeper " + DecisionLog.num(fee) + " adena)"));
+		return true;
 	}
 
 	/** @return whether this class can craft the dwarven shot recipes (Artisan and Warsmith); only the Merchant, Sateya, does */

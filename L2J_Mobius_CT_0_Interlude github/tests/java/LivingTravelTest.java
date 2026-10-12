@@ -30,6 +30,7 @@ import org.l2jmobius.gameserver.livingpop.ClassPath;
 import org.l2jmobius.gameserver.livingpop.ColdBot;
 import org.l2jmobius.gameserver.livingpop.ColdLife;
 import org.l2jmobius.gameserver.livingpop.ColdRisk;
+import org.l2jmobius.gameserver.livingpop.ColdSeedPlan;
 import org.l2jmobius.gameserver.livingpop.DecisionLog;
 import org.l2jmobius.gameserver.livingpop.DropYield;
 import org.l2jmobius.gameserver.livingpop.MerchantPlanner;
@@ -548,6 +549,8 @@ public class LivingTravelTest
 		final ZoneCatalog catalog = ZoneCatalog.parse(MERCHANT_XML);
 		final List<String> listed = new ArrayList<>();
 		final Set<Integer> bought = new HashSet<>();
+		final Map<String, Long> shotStock = new HashMap<>();
+		final List<String> sold = new ArrayList<>();
 		final ColdLife.Workshop workshop = new ColdLife.Workshop()
 		{
 			@Override
@@ -565,7 +568,32 @@ public class LivingTravelTest
 			@Override
 			public long onSale(String town, int shotItemId)
 			{
-				return 0L;
+				return shotStock.getOrDefault(town + ":" + shotItemId, 0L);
+			}
+
+			@Override
+			public int shotFor(ColdBot bot)
+			{
+				return 1463;
+			}
+
+			@Override
+			public long shotPrice(String town, int shotItemId)
+			{
+				return 14L;
+			}
+
+			@Override
+			public boolean buyShots(String town, int shotItemId, long count, long unitPrice)
+			{
+				final long held = shotStock.getOrDefault(town + ":" + shotItemId, 0L);
+				if (held < count)
+				{
+					return false;
+				}
+				shotStock.put(town + ":" + shotItemId, held - count);
+				sold.add(town + ":" + shotItemId + ":" + count + ":" + unitPrice);
+				return true;
 			}
 
 			@Override
@@ -659,7 +687,26 @@ public class LivingTravelTest
 		check("other dwarves still pick their class by id, so not all become Artisans", (artisans > 0) && (artisans < 200));
 		check("the Merchant's class path is Artisan then Warsmith", (ClassPath.next(56, 1L, "Sateya") == 57));
 
+		// A hunter that fires D shots buys them only from the shop in Gludio: it goes there, and the shots leave the stock.
+		final ColdBot hunter = bot(25, "Hunt", 100_000L, 10L, 2L, 0);
+		hunter.setSoulshots(0L);
+		hunter.setTown("Giran");
+		hunter.setActivity(ColdLife.IN_TOWN);
+		hunter.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		final List<DecisionLog.Event> hunterLog = new ArrayList<>();
+		runUntil(hunter, 1L, context, hunterLog, b -> !ColdLife.IN_TOWN.equals(b.getActivity()));
+		check("with the shop empty it does not travel for shots and buys none from the grocer", ColdLife.TO_ZONE.equals(hunter.getActivity()) && (hunter.getSoulshots() == 0L) && sold.isEmpty());
+		shotStock.put("Gludio:1463", 5000L);
+		hunter.setTown("Giran");
+		hunter.setActivity(ColdLife.IN_TOWN);
+		hunter.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		runUntil(hunter, 1L, context, hunterLog, b -> "Gludio".equals(b.getTown()) && !ColdLife.TO_TOWN.equals(b.getActivity()) && !ColdLife.IN_TOWN.equals(b.getActivity()));
+		check("with shots in the Gludio shop it goes there and buys them", (hunter.getSoulshots() > 0L) && (sold.size() == 1) && sold.get(0).startsWith("Gludio:1463:") && sold.get(0).endsWith(":14"));
+		check("the shots left the stock", shotStock.get("Gludio:1463") == (5000L - hunter.getSoulshots()));
+		check("and they cost the shop price", hunter.getAdena() <= (100_000L - (hunter.getSoulshots() * 14L)));
+
 		// Above the free-teleport level the Merchant still pays no fee between towns (alt and warehouse), only the isle.
+		shotStock.clear();
 		final ColdBot rich = bot(45, "Hunt", 100_000L, 10L, 2L, 0);
 		rich.setClassId(118);
 		rich.setName("Sateya");
@@ -672,6 +719,10 @@ public class LivingTravelTest
 		runUntil(rich, 1L, context, richLog, b -> ColdLife.CRAFTING.equals(b.getActivity()));
 		check("it went to Giran for the materials at no gatekeeper cost", richLog.stream().anyMatch(e -> e.text().contains("Goes to Giran") && e.text().contains("gatekeeper 0 adena")));
 		check("only the gatekeeper to the isle was paid", ColdLife.CRAFTING.equals(rich.getActivity()) && (rich.getAdena() >= (100_000L - 18_473L - 5_700L - 2_000L)));
+
+		check("Sateriok goes Fighter, Warrior, Gladiator, Duelist", (ClassPath.next(0, 7L, "Sateriok") == 1) && (ClassPath.next(1, 7L, "Sateriok") == 2) && (ClassPath.next(2, 7L, "Sateriok") == 88));
+		final ColdSeedPlan.SeedSpec teras = ColdSeedPlan.randomNamed("Teras", new Random(3));
+		check("Teras is born in a starting class of a race", "Teras".equals(teras.name()) && (teras.race() != null) && (ClassPath.next(teras.classId(), 1L) != -1));
 
 		final ColdBot saved = new ColdBot();
 		saved.setStatsJson(merchant.getStatsJson());

@@ -209,6 +209,25 @@ public final class ClassPath
 		{
 			return 56;
 		}
+		// The owner's bot is a human Fighter who becomes a Warrior, a Gladiator and a Duelist.
+		if (ColdSeedPlan.OWNER.equalsIgnoreCase(name))
+		{
+			switch (classId)
+			{
+				case 0:
+				{
+					return 1;
+				}
+				case 1:
+				{
+					return 2;
+				}
+				case 2:
+				{
+					return 88;
+				}
+			}
+		}
 		return next(classId, botId);
 	}
 

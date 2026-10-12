@@ -341,10 +341,40 @@ public class LivingPopulationManager
 	private final class MerchantWorkshop implements ColdLife.Workshop
 	{
 		private final MerchantConfig _config;
+		private final int _tierStep;
 
-		MerchantWorkshop(MerchantConfig config)
+		MerchantWorkshop(MerchantConfig config, int tierStep)
 		{
 			_config = config;
+			_tierStep = tierStep;
+		}
+
+		@Override
+		public int shotFor(ColdBot bot)
+		{
+			return shotOf(bot, _tierStep);
+		}
+
+		@Override
+		public long shotPrice(String town, int shotItemId)
+		{
+			return shotFloor(shotItemId);
+		}
+
+		@Override
+		public boolean buyShots(String town, int shotItemId, long count, long unitPrice)
+		{
+			final List<TownStock.Listing> taken = _townStock.take(town, shotItemId, count);
+			if (taken == null)
+			{
+				return false;
+			}
+			final List<Long> shares = TownStock.shares(taken, count * unitPrice);
+			for (int i = 0; i < taken.size(); i++)
+			{
+				payOwner(taken.get(i).owner(), shares.get(i));
+			}
+			return true;
 		}
 
 		@Override
@@ -477,8 +507,7 @@ public class LivingPopulationManager
 		}
 		// The newbie reward lands before the span's shots are fired, so a bot that just claimed it fires from that stock.
 		final long available = before.soulshots() + (before.rewardClaimed() ? 0L : params.soulshotMilestoneGrant());
-		final int weaponGrade = ColdLife.gradesOf(bot, _gear, combat.tierStep())[0];
-		final int shot = LivingSupplies.shotIdForGrade(bot.getClassId(), weaponGrade, usesBlessed(bot));
+		final int shot = shotOf(bot, combat.tierStep());
 		// Every hunter buys D shots in Gludio and C shots in Giran, so the demand the Merchant reads is funnelled to the town it sells in.
 		final ShotCrafting.Recipe recipe = ShotCrafting.byShot(shot);
 		_shotDemand.record((recipe == null) ? bot.getTown() : recipe.saleTown(), shot, Math.min(wanted, available), wanted, now);
@@ -490,8 +519,19 @@ public class LivingPopulationManager
 		return _shotDemand;
 	}
 
+	/** @return the shot item a bot fires, by its class and the grade of its weapon */
+	private int shotOf(ColdBot bot, int tierStep)
+	{
+		return LivingSupplies.shotIdForGrade(bot.getClassId(), ColdLife.gradesOf(bot, _gear, tierStep)[0], usesBlessed(bot));
+	}
+
 	private boolean usesBlessed(ColdBot bot)
 	{
+		// The Merchant makes blessed spiritshots and soulshots only, so a mage fires blessed ones from D grade on.
+		if ((_merchant != null) && LivingSupplies.isMystic(bot.getClassId()) && (ColdLife.gradesOf(bot, _gear, _config.gearTierLevelStep())[0] >= 1))
+		{
+			return true;
+		}
 		return (_blessedShare > 0.0) && (Math.floorMod(bot.getId() * 2654435761L, 100L) < Math.round(_blessedShare * 100.0));
 	}
 
@@ -721,7 +761,9 @@ public class LivingPopulationManager
 		final int wanted = Math.max(0, _populationTarget);
 		final int missing = wanted - _bots.size();
 		final boolean needMerchant = (_merchant != null) && (wanted > 0) && _bots.stream().noneMatch(present -> ShotCrafting.MERCHANT.equalsIgnoreCase(present.getName()));
-		if ((missing <= 0) && !needMerchant)
+		final boolean needOwner = (wanted > 0) && _bots.stream().noneMatch(present -> ColdSeedPlan.OWNER.equalsIgnoreCase(present.getName()));
+		final boolean needFriend = (wanted > 0) && _bots.stream().noneMatch(present -> ColdSeedPlan.FRIEND.equalsIgnoreCase(present.getName()));
+		if ((missing <= 0) && !needMerchant && !needOwner && !needFriend)
 		{
 			return;
 		}
@@ -735,15 +777,29 @@ public class LivingPopulationManager
 			classes.merge(startingClassOf(present.getClassId()), 1, Integer::sum);
 		}
 		final List<ColdSeedPlan.SeedSpec> specs = new ArrayList<>(ColdSeedPlan.plan(needed, classes, _random, name -> nameTaken(name, existing)));
+		// Named bots in the first wave: Sateya the Merchant (a dwarf), Sateriok (a human Fighter who becomes a Duelist) and Teras (a random race and class).
+		final List<ColdSeedPlan.SeedSpec> named = new ArrayList<>();
 		if (needMerchant)
 		{
-			if (nameTaken(ShotCrafting.MERCHANT, existing))
+			named.add(new ColdSeedPlan.SeedSpec("Dwarf", 53, ShotCrafting.MERCHANT));
+		}
+		if (needOwner)
+		{
+			named.add(new ColdSeedPlan.SeedSpec("Human", 0, ColdSeedPlan.OWNER));
+		}
+		if (needFriend)
+		{
+			named.add(ColdSeedPlan.randomNamed(ColdSeedPlan.FRIEND, _random));
+		}
+		for (ColdSeedPlan.SeedSpec spec : named)
+		{
+			if (nameTaken(spec.name(), existing))
 			{
-				LOGGER.warning("LivingPopulation: a character is already named " + ShotCrafting.MERCHANT + ", so the Merchant cannot be born. Rename it to let the Merchant craft shots.");
+				LOGGER.warning("LivingPopulation: a character is already named " + spec.name() + ", so that bot cannot be born. Rename the character to let it be.");
 			}
 			else
 			{
-				specs.add(new ColdSeedPlan.SeedSpec("Dwarf", 53, ShotCrafting.MERCHANT)); // the Merchant: a dwarf who becomes an Artisan
+				specs.add(spec);
 			}
 		}
 
@@ -958,7 +1014,7 @@ public class LivingPopulationManager
 			}
 		};
 		final Map<String, Integer> occupancy = (travel || (_respawnLimit && combat.enabled())) ? zoneOccupancy() : null;
-		final ColdLife.Context life = travel ? new ColdLife.Context(_catalog, _travelConfig.supplyParams(_config), _travelConfig.travelParams(), priceBook, occupancy, _random, _travelConfig.riskParams(), expToNextLevel, _travelConfig.classQuestParams(), _travelConfig.skillTraining() ? this::skillTree : null, _gear, combat.enabled() ? combat : null, (_merchant == null) ? null : new MerchantWorkshop(_merchant)) : null;
+		final ColdLife.Context life = travel ? new ColdLife.Context(_catalog, _travelConfig.supplyParams(_config), _travelConfig.travelParams(), priceBook, occupancy, _random, _travelConfig.riskParams(), expToNextLevel, _travelConfig.classQuestParams(), _travelConfig.skillTraining() ? this::skillTree : null, _gear, combat.enabled() ? combat : null, (_merchant == null) ? null : new MerchantWorkshop(_merchant, combat.enabled() ? combat.tierStep() : _config.gearTierLevelStep())) : null;
 		_handoff.setLife(life); // hot bots make the same decisions, acted out by their live characters
 
 		// Resolve up to resolveBatch due bots, starting from a rotating cursor so a population larger than the batch is
