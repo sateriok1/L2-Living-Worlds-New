@@ -2698,6 +2698,11 @@ public class PhantomManager implements IXmlReader
 			}
 		}
 
+		if (org.l2jmobius.gameserver.livingpop.ShotCrafting.MERCHANT.equalsIgnoreCase(phantom.getName()))
+		{
+			phantom.setTitle(org.l2jmobius.gameserver.livingpop.ShotCrafting.MERCHANT_TITLE); // Sateya's title, kept on every spawn
+		}
+
 		// The cold row is the source of truth: bring the character up to the row's level even when reloaded (it may be
 		// behind after cold progression). finishSpawn re-levels, re-classes, re-learns and re-gears to this level.
 		final int targetLevel = Math.max(1, level);

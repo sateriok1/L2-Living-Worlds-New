@@ -82,6 +82,8 @@ public final class ShotCrafting
 
 	/** The Merchant's character name: the one dwarf that crafts. */
 	public static final String MERCHANT = "Sateya";
+	/** Her title in the world. */
+	public static final String MERCHANT_TITLE = "The Merchant";
 	/** The phantom that sells the D shots in Gludio and the one that sells the C shots in Giran. */
 	public static final String D_SHOP = "SatDShots";
 	public static final String C_SHOP = "SatCShots";
