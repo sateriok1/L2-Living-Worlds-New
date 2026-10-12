@@ -32,6 +32,9 @@ import java.util.List;
  */
 public final class GoalPlanner
 {
+	/** The class change comes before every other goal. */
+	public static final int CLASS_PRIORITY = 90;
+
 	private GoalPlanner()
 	{
 	}
@@ -146,10 +149,11 @@ public final class GoalPlanner
 			candidates.add(new Candidate(Goal.TOWN, (view.potions() == 0) ? 80 : 70, reason, (haul.potions() >= enough) ? null : "it could only buy " + DecisionLog.num(haul.potions()) + " of the " + DecisionLog.num(missing) + " it needs (" + DecisionLog.num(prices.potion()) + " each, and it keeps " + DecisionLog.num(reserve) + " of its " + DecisionLog.num(view.adena()) + " adena in reserve)", "potions"));
 		}
 
-		// Class change: taking the quest from a class master, or handing it in. A milestone players drop everything for.
+		// Class change: taking the quest from a class master, or handing it in. A milestone players drop everything for, so it
+		// outranks every other errand and even a zone that is too hard (a bot that waits for its class change stays weak).
 		if (view.classErrand() != null)
 		{
-			candidates.add(new Candidate(Goal.TOWN, 78, view.classErrand(), view.classBlocker(), "class"));
+			candidates.add(new Candidate(Goal.TOWN, CLASS_PRIORITY, view.classErrand(), view.classBlocker(), "class"));
 		}
 
 		// Skills: a batch of new skills waiting at the trainer is worth a trip, below supplies and gear.

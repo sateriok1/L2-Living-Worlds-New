@@ -25,9 +25,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.PriorityQueue;
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -328,11 +330,12 @@ public final class ZoneCatalog
 	}
 
 	/**
-	 * Where a bot in a town goes to see a class master: this town when it has one, otherwise the town with one that
-	 * this town's gatekeeper reaches for the lowest fee.
+	 * Where a bot in a town goes to see a class master: this town when it has one, otherwise the first stop on the cheapest
+	 * gatekeeper route to a town that has one. A town whose gatekeeper reaches no master directly (Gludin Village, the race
+	 * villages) sends the bot through a hub, which runs its errands there and hops on from it.
 	 * @param script the class master's script ({@link ClassPath#master})
 	 * @param from the town the bot is in
-	 * @return that town, or null when no master is here or one gatekeeper hop away
+	 * @return this town, or the next town on the way (one gatekeeper hop from here), or null when no town with the master can be reached at all
 	 */
 	public Town masterTown(String script, Town from)
 	{
@@ -344,18 +347,45 @@ public final class ZoneCatalog
 		{
 			return from;
 		}
-		Town best = null;
-		long bestFee = Long.MAX_VALUE;
-		for (Town town : _towns)
+		// The cheapest route by fee (Dijkstra), remembering the first stop of each.
+		final Map<String, Long> cost = new HashMap<>();
+		final Map<String, String> first = new HashMap<>();
+		final PriorityQueue<Map.Entry<String, Long>> queue = new PriorityQueue<>(Map.Entry.comparingByValue());
+		cost.put(from.name(), 0L);
+		queue.add(Map.entry(from.name(), 0L));
+		while (!queue.isEmpty())
 		{
-			final long fee = from.feeTo(town.name());
-			if ((town.master(script) != null) && (fee >= 0) && (fee < bestFee))
+			final Map.Entry<String, Long> head = queue.poll();
+			if (head.getValue() > cost.getOrDefault(head.getKey(), Long.MAX_VALUE))
 			{
-				bestFee = fee;
-				best = town;
+				continue; // an older, dearer entry
+			}
+			final Town here = town(head.getKey());
+			if (here == null)
+			{
+				continue;
+			}
+			if ((here != from) && (here.master(script) != null))
+			{
+				return town(first.get(here.name()));
+			}
+			for (Map.Entry<String, Long> route : here.routes().entrySet())
+			{
+				final Town next = town(route.getKey());
+				if ((next == null) || (route.getValue() < 0))
+				{
+					continue;
+				}
+				final long total = head.getValue() + route.getValue();
+				if (total < cost.getOrDefault(next.name(), Long.MAX_VALUE))
+				{
+					cost.put(next.name(), total);
+					first.put(next.name(), (here == from) ? next.name() : first.get(here.name()));
+					queue.add(Map.entry(next.name(), total));
+				}
 			}
 		}
-		return best;
+		return null;
 	}
 
 	/**
