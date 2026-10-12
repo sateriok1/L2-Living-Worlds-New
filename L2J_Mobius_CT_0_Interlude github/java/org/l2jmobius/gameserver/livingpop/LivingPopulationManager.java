@@ -56,6 +56,7 @@ import org.l2jmobius.gameserver.data.xml.NpcData;
 import org.l2jmobius.gameserver.data.xml.PlayerTemplateData;
 import org.l2jmobius.gameserver.data.xml.SkillTreeData;
 import org.l2jmobius.gameserver.config.custom.FakePlayersConfig;
+import org.l2jmobius.gameserver.managers.FakePlayerBehaviorManager;
 import org.l2jmobius.gameserver.managers.FakePlayerChatManager;
 import org.l2jmobius.gameserver.managers.FakePlayerStoreFactory;
 import org.l2jmobius.gameserver.managers.PhantomManager;
@@ -65,6 +66,8 @@ import org.l2jmobius.gameserver.network.GameClient;
 import org.l2jmobius.gameserver.modules.Json;
 import org.l2jmobius.gameserver.model.Location;
 import org.l2jmobius.gameserver.model.World;
+import org.l2jmobius.gameserver.model.actor.Npc;
+import org.l2jmobius.gameserver.model.actor.holders.npc.FakePlayerStoreItem;
 import org.l2jmobius.gameserver.model.actor.Player;
 import org.l2jmobius.gameserver.model.actor.enums.player.PlayerClass;
 import org.l2jmobius.gameserver.model.actor.holders.npc.DropGroupHolder;
@@ -259,8 +262,9 @@ public class LivingPopulationManager
 	 * @param hoursOfStock how many hours of demand a batch covers
 	 * @param maxCrafts the most crafts one trip makes
 	 * @param demandHours how many hours of shot demand it averages over
+	 * @param maxMarkup how far above its floor price a shot sells while the shop holds none (0.5 = 50% more)
 	 */
-	public record MerchantConfig(ShotCrafting.Prices prices, long craftMs, double hoursOfStock, long maxCrafts, int demandHours)
+	public record MerchantConfig(ShotCrafting.Prices prices, long craftMs, double hoursOfStock, long maxCrafts, int demandHours, double maxMarkup)
 	{
 	}
 
@@ -268,6 +272,69 @@ public class LivingPopulationManager
 	public void setMerchant(MerchantConfig merchant)
 	{
 		_merchant = merchant;
+		FakePlayerStoreFactory.setShopkeeperItems((merchant == null) ? Set.of() : SHOT_ITEMS); // only SatDShots and SatCShots sell the Merchant's shots
+	}
+
+	private final Map<String, Npc> _shopkeepers = new HashMap<>(); // shop name to its phantom, while it stands in the world
+
+	/**
+	 * Keeps the Merchant's two phantom shops in step with the town stock: SatDShots in Gludio sells the D shots and
+	 * SatCShots in Giran the C shots. A shop opens when its town holds shots, takes in what was added, and closes when
+	 * they are gone.
+	 */
+	synchronized void syncShopkeepers()
+	{
+		final ZoneCatalog catalog = _catalog;
+		if ((catalog == null) || (FakePlayerStoreFactory.supply() == null))
+		{
+			return;
+		}
+		for (String[] shop : new String[][]
+		{
+			{
+				ShotCrafting.D_SHOP,
+				"Gludio"
+			},
+			{
+				ShotCrafting.C_SHOP,
+				"Giran"
+			}
+		})
+		{
+			final ZoneCatalog.Town town = catalog.town(shop[1]);
+			if (town == null)
+			{
+				continue;
+			}
+			final Set<Integer> items = new HashSet<>();
+			for (ShotCrafting.Recipe recipe : ShotCrafting.RECIPES)
+			{
+				if (recipe.shopName().equals(shop[0]))
+				{
+					items.add(recipe.shotItemId());
+				}
+			}
+			final Location where = new Location(town.arrival().x() + 150, town.arrival().y() + 150, town.arrival().z());
+			final List<FakePlayerStoreItem> stock = FakePlayerStoreFactory.generateShopkeeper(new Location(town.arrival().x(), town.arrival().y(), town.arrival().z()), items);
+			final Npc standing = _shopkeepers.get(shop[0]);
+			if ((standing != null) && (!standing.isSpawned() || standing.isDead()))
+			{
+				_shopkeepers.remove(shop[0]);
+			}
+			final Npc npc = _shopkeepers.get(shop[0]);
+			if (npc != null)
+			{
+				FakePlayerBehaviorManager.getInstance().restockShopkeeper(npc, stock);
+			}
+			else if (!stock.isEmpty())
+			{
+				final Npc placed = FakePlayerBehaviorManager.getInstance().placeShopkeeper(where, shop[0], stock);
+				if (placed != null)
+				{
+					_shopkeepers.put(shop[0], placed);
+				}
+			}
+		}
 	}
 
 	/** The Merchant's view of the world: the town stock, the shot demand and its shop. */
@@ -348,6 +415,7 @@ public class LivingPopulationManager
 		public void list(String town, long owner, int shotItemId, long count)
 		{
 			_townStock.add(town, owner, shotItemId, count);
+			syncShopkeepers();
 		}
 
 		@Override
@@ -369,12 +437,20 @@ public class LivingPopulationManager
 		}
 	}
 
-	/** @return the lowest unit price a shot sells at in a shop (the Merchant's cost plus 1), or 0 for any other item */
+	/**
+	 * @return the unit price a shot sells at in a shop: its production cost plus 1 once the shop holds enough shots for
+	 *         the demand, and up to {@code maxMarkup} higher while it holds fewer; 0 for any other item
+	 */
 	private long shotFloor(int itemId)
 	{
 		final MerchantConfig merchant = _merchant;
 		final ShotCrafting.Recipe recipe = ShotCrafting.byShot(itemId);
-		return ((merchant == null) || (recipe == null)) ? 0L : ShotCrafting.floorPrice(recipe, merchant.prices());
+		if ((merchant == null) || (recipe == null))
+		{
+			return 0L;
+		}
+		final double wanted = _shotDemand.perHour(recipe.saleTown(), itemId, merchant.demandHours(), System.currentTimeMillis()).wanted();
+		return MerchantPlanner.price(ShotCrafting.floorPrice(recipe, merchant.prices()), _townStock.count(recipe.saleTown(), itemId), wanted * merchant.hoursOfStock(), merchant.maxMarkup());
 	}
 
 	public void setBlessedSpiritshots(double damage, double share)
@@ -1696,6 +1772,7 @@ public class LivingPopulationManager
 			}
 			Files.write(path, json.getBytes(StandardCharsets.UTF_8));
 			sweepTownStock();
+			syncShopkeepers();
 			saveTownStock();
 		}
 		catch (Exception e)

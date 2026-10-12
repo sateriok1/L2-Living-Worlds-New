@@ -107,4 +107,24 @@ public final class MerchantPlanner
 		}
 		return best;
 	}
+
+	/**
+	 * What a shot sells for: the floor price (production cost plus 1) once the shop holds enough shots for the demand,
+	 * and more the fewer it holds, up to {@code maxMarkup} above the floor when it holds none. The Merchant keeps prices
+	 * high while it is short of shots and lets them fall to the floor once it supplies all of the demand.
+	 * @param floor the floor price
+	 * @param onSale shots the shop holds
+	 * @param demand shots the demand calls for (the hourly want times the hours of stock)
+	 * @param maxMarkup the markup at an empty shop (0.5 = 50%)
+	 * @return the unit price, a whole number of adena
+	 */
+	public static long price(long floor, long onSale, double demand, double maxMarkup)
+	{
+		if (demand <= 0.0)
+		{
+			return floor;
+		}
+		final double shortage = Math.max(0.0, Math.min(1.0, 1.0 - (onSale / demand)));
+		return (long) Math.ceil(floor * (1.0 + (Math.max(0.0, maxMarkup) * shortage)));
+	}
 }

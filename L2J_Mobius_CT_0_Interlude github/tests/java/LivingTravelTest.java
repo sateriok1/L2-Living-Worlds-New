@@ -539,6 +539,11 @@ public class LivingTravelTest
 		check("a recipe it knows is not learned again", MerchantPlanner.recipeToLearn(ShotCrafting.bit(ssD), 25, wanted) == bspsD);
 		check("C recipes wait for level 40", MerchantPlanner.recipeToLearn(ShotCrafting.bit(ssD) | ShotCrafting.bit(bspsD), 39, wanted) == null);
 
+		check("an empty shop asks the full markup over the floor", MerchantPlanner.price(11L, 0L, 2000.0, 0.5) == 17L);
+		check("the price falls as the shop fills", MerchantPlanner.price(11L, 1000L, 2000.0, 0.5) == 14L);
+		check("a shop with enough for the demand sells at the floor", (MerchantPlanner.price(11L, 2000L, 2000.0, 0.5) == 11L) && (MerchantPlanner.price(11L, 9000L, 2000.0, 0.5) == 11L));
+		check("with no demand it is the floor too", MerchantPlanner.price(11L, 0L, 0.0, 0.5) == 11L);
+
 		// The trip: buys its materials in Giran, sits on the isle, reads a scroll, sells in Gludio.
 		final ZoneCatalog catalog = ZoneCatalog.parse(MERCHANT_XML);
 		final List<String> listed = new ArrayList<>();
