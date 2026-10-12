@@ -643,6 +643,7 @@ public class LivingTravelTest
 			public void list(String town, long owner, int shotItemId, long count)
 			{
 				listed.add(town + ":" + owner + ":" + shotItemId + ":" + count);
+				shotStock.merge(town + ":" + shotItemId, count, Long::sum); // what she lists is on sale, so the demand is covered
 			}
 
 			@Override
@@ -685,6 +686,110 @@ public class LivingTravelTest
 		runUntil(merchant, now, context, log, b -> !ColdLife.DELIVERING.equals(b.getActivity()));
 		check("the shots go on sale in Gludio under its id", listed.equals(List.of("Gludio:1:1463:2028")) && (merchant.getCarryCount() == 0L));
 		check("then it goes back to hunting", ColdLife.TO_ZONE.equals(merchant.getActivity()));
+
+		// The craft goal: a Merchant who knows her recipes and is well supplied still goes to town when the hunters want
+		// shots nobody has on sale. (Before this goal she kept hunting forever: she only crafted when she was in town for
+		// something else.)
+		shotStock.clear(); // the earlier trip's shots are gone
+		listed.clear();
+		final ColdBot idle = bot(25, "Hunt", 100_000L, 1_000_000L, 5L, 5200);
+		idle.setClassId(56);
+		idle.setName("Sateya");
+		idle.setRecipes(ShotCrafting.bit(ssD));
+		idle.setSoulshots(10_000_000L);
+		idle.setGearTier(9);
+		final List<DecisionLog.Event> idleLog = new ArrayList<>();
+		boolean crafted = false;
+		boolean back = false;
+		int cycles = 0;
+		for (int hour = 1; hour <= 12; hour++)
+		{
+			ColdLife.advance(idle, hour * 3_600_000L, 3_600_000L, context, idleLog);
+			crafted |= ColdLife.CRAFTING.equals(idle.getActivity()) || ColdLife.DELIVERING.equals(idle.getActivity());
+			back |= crafted && ColdLife.HUNTING.equals(idle.getActivity());
+		}
+		for (DecisionLog.Event e : idleLog)
+		{
+			cycles += e.text().startsWith("Decided to go to town: Hunters want") ? 1 : 0;
+		}
+		check("an idle, well-supplied Merchant goes to town to craft what the hunters want", crafted && (idle.getRecipes() != 0));
+		check("she crafts once: shots on sale cover the demand, so she does not loop", (cycles == 1) && listed.contains("Gludio:" + idle.getId() + ":1463:2028"));
+		check("and then she is back hunting", back && ColdLife.HUNTING.equals(idle.getActivity()) && "Hunt".equals(idle.getZone()));
+
+		// Blockers: nothing worth crafting, no money, no scroll for the isle, goods still to sell, or not the Merchant.
+		shotStock.clear();
+		final ColdBot poor = bot(25, "Hunt", 300L, 1_000_000L, 5L, 5200);
+		poor.setClassId(56);
+		poor.setName("Sateya");
+		poor.setRecipes(ShotCrafting.bit(ssD));
+		poor.setSoulshots(10_000_000L);
+		poor.setGearTier(9);
+		final List<DecisionLog.Event> poorLog = new ArrayList<>();
+		ColdLife.advance(poor, 3_600_000L, 3_600_000L, context, poorLog);
+		check("with no money to craft with she keeps hunting", ColdLife.HUNTING.equals(poor.getActivity()) && (poor.getTown() == null));
+
+		shotStock.clear();
+		final ColdBot noRecipe = bot(25, "Hunt", 100_000L, 1_000_000L, 5L, 5200);
+		noRecipe.setClassId(56);
+		noRecipe.setName("Sateya");
+		noRecipe.setSoulshots(10_000_000L);
+		noRecipe.setGearTier(9);
+		bought.add(1804); // the town no longer stocks the recipe she lacks
+		ColdLife.advance(noRecipe, 3_600_000L, 3_600_000L, context, new ArrayList<>());
+		check("with no recipe and none in stock she keeps hunting", ColdLife.HUNTING.equals(noRecipe.getActivity()) && (noRecipe.getTown() == null));
+		bought.remove(1804);
+
+		shotStock.clear();
+		final ColdBot noScroll = bot(25, "Hunt", 100_000L, 1_000_000L, 0L, 5200);
+		noScroll.setClassId(56);
+		noScroll.setName("Sateya");
+		noScroll.setRecipes(ShotCrafting.bit(ssD));
+		noScroll.setSoulshots(10_000_000L);
+		noScroll.setGearTier(9);
+		final List<DecisionLog.Event> noScrollLog = new ArrayList<>();
+		ColdLife.advance(noScroll, 3_600_000L, 3_600_000L, context, noScrollLog);
+		check("without a Scroll of Escape for the isle the craft errand is blocked (and logged as such)", ColdLife.HUNTING.equals(noScroll.getActivity()) && (noScroll.getTown() == null));
+
+		shotStock.clear();
+		final ColdBot carrying = bot(25, "Hunt", 100_000L, 1_000_000L, 5L, 5200);
+		carrying.setClassId(56);
+		carrying.setName("Sateya");
+		carrying.setRecipes(ShotCrafting.bit(ssD));
+		carrying.setSoulshots(10_000_000L);
+		carrying.setGearTier(9);
+		carrying.setCarry(1463, 100L, "Gludio");
+		ColdLife.advance(carrying, 3_600_000L, 3_600_000L, context, new ArrayList<>());
+		check("with unsold goods in her bag she keeps hunting", ColdLife.HUNTING.equals(carrying.getActivity()) && (carrying.getTown() == null));
+
+		shotStock.clear();
+		final ColdBot artisan = bot(25, "Hunt", 100_000L, 1_000_000L, 5L, 5200);
+		artisan.setClassId(56);
+		artisan.setRecipes(ShotCrafting.bit(ssD));
+		artisan.setSoulshots(10_000_000L);
+		artisan.setGearTier(9);
+		ColdLife.advance(artisan, 3_600_000L, 3_600_000L, context, new ArrayList<>());
+		check("an Artisan that is not Sateya never gets a craft errand", ColdLife.HUNTING.equals(artisan.getActivity()) && (artisan.getTown() == null));
+
+		shotStock.clear();
+		final ColdBot control = bot(25, "Hunt", 100_000L, 1_000_000L, 5L, 5200);
+		control.setClassId(56);
+		control.setName("Sateya");
+		control.setRecipes(ShotCrafting.bit(ssD));
+		control.setSoulshots(10_000_000L);
+		control.setGearTier(9);
+		ColdLife.advance(control, 3_600_000L, 3_600_000L, context, new ArrayList<>());
+		check("the control Merchant with the same stock, money and scrolls does set off", ColdLife.CRAFTING.equals(control.getActivity()) || (control.getTown() != null));
+
+		// Priorities: supplies and gear first, then her business, then the trainer.
+		final SupplyPlanner.Prices bookPrices = prices();
+		final GoalPlanner.View base = new GoalPlanner.View(25, 100_000L, 1_000_000L, 10_000_000L, 5L, 9, true, "Hunt", 15, 50, null, null, null, "new skills", null, null, null, null, "shots", null);
+		check("craft beats the trainer", "craft".equals(GoalPlanner.plan(base, bookPrices, supply(), false).chosen().key()));
+		final GoalPlanner.View gear = new GoalPlanner.View(25, 100_000L, 1_000_000L, 10_000_000L, 5L, 9, true, "Hunt", 15, 50, null, null, null, "new skills", null, "better gloves", null, "gloves", "shots", null);
+		check("gear beats craft", "gloves".equals(GoalPlanner.plan(gear, bookPrices, supply(), false).chosen().key()));
+		final GoalPlanner.View dry = new GoalPlanner.View(25, 100_000L, 0L, 10_000_000L, 5L, 9, true, "Hunt", 15, 50, null, null, null, "new skills", null, null, null, null, "shots", null);
+		check("no potions beats craft", "potions".equals(GoalPlanner.plan(dry, bookPrices, supply(), false).chosen().key()));
+		final GoalPlanner.View blocked = new GoalPlanner.View(25, 100_000L, 1_000_000L, 10_000_000L, 5L, 9, true, "Hunt", 15, 50, null, null, null, "new skills", null, null, null, null, "shots", "no scroll");
+		check("a blocked craft errand is passed over for the trainer", "skills".equals(GoalPlanner.plan(blocked, bookPrices, supply(), false).chosen().key()));
 
 		final ColdBot warrior = bot(25, "Hunt", 100_000L, 10L, 2L, 0);
 		warrior.setClassId(56); // an Artisan too, but not the Merchant

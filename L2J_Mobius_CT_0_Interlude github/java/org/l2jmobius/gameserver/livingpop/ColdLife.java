@@ -641,7 +641,8 @@ public final class ColdLife
 		final String[] classErrand = classErrand(bot, town, context);
 		final String[] skillErrand = skillErrand(bot, town, context);
 		final String[] gearErrand = gearErrand(bot, town, context, now);
-		final GoalPlanner.View view = new GoalPlanner.View(bot.getLevel(), purse(bot), bot.getPotions(), bot.getSoulshots(), bot.getEscapes(), bot.getGearTier(), bot.isRewardClaimed(), (zone == null) ? null : zone.name(), (zone == null) ? 0 : zone.minLevel(), (zone == null) ? 0 : zone.maxLevel(), betterZone, classErrand[0], classErrand[1], skillErrand[0], skillErrand[1], gearErrand[0], gearErrand[1], gearErrand[2]);
+		final String[] craftErrand = craftErrand(bot, town, context);
+		final GoalPlanner.View view = new GoalPlanner.View(bot.getLevel(), purse(bot), bot.getPotions(), bot.getSoulshots(), bot.getEscapes(), bot.getGearTier(), bot.isRewardClaimed(), (zone == null) ? null : zone.name(), (zone == null) ? 0 : zone.minLevel(), (zone == null) ? 0 : zone.maxLevel(), betterZone, classErrand[0], classErrand[1], skillErrand[0], skillErrand[1], gearErrand[0], gearErrand[1], gearErrand[2], craftErrand[0], craftErrand[1]);
 		final GoalPlanner.Plan plan = GoalPlanner.plan(view, prices, supplyFor(bot, context), LivingSupplies.isMystic(bot.getClassId()));
 		bot.setGoal(goalLabel(plan.chosen().goal()));
 		events.add(new DecisionLog.Event(planKey(plan), GoalPlanner.describe(plan)));
@@ -1170,6 +1171,51 @@ public final class ColdLife
 		}
 		final String activity = bot.getActivity();
 		return !isHunting(activity) && !TO_ZONE.equals(activity);
+	}
+
+	/**
+	 * The Merchant's craft errand for the planner: a recipe she can learn in this town's stock, or shots the hunters want that
+	 * she can afford to make. Nothing for anyone else, and nothing when there is nothing worth making (the stock on sale
+	 * already covers the demand, no recipe is in reach, no money). It reads the same numbers as {@link #craftTrip}, so an
+	 * errand only shows when the trip would actually go.
+	 * @return the reason, then the blocker (each null when absent)
+	 */
+	private static String[] craftErrand(ColdBot bot, Town town, Context context)
+	{
+		final String[] errand = new String[2];
+		final Workshop shop = context.workshop();
+		if ((shop == null) || (town == null) || !isMerchant(bot))
+		{
+			return errand;
+		}
+		final long reserve = context.supply().reserveFloor();
+		final Map<Integer, Double> wanted = shop.wanted();
+		final ShotCrafting.Recipe learn = MerchantPlanner.recipeToLearn(bot.getRecipes(), bot.getLevel(), wanted);
+		final boolean learnable = (learn != null) && (bot.getAdena() >= (shop.recipePrice(learn.recipeItemId()) + reserve)) && (shop.recipeTown(learn.recipeItemId(), town.name()) != null);
+		final Zone isle = context.catalog().zone(CRAFT_ZONE);
+		final ZoneCatalog.Teleport way = (isle == null) ? null : isle.teleportFrom(MATERIALS_TOWN);
+		final boolean canIsle = (way != null) && (bot.getEscapes() >= SupplyPlanner.MIN_ESCAPES);
+		final long fee = (!canIsle || freeTeleport(bot, context)) ? 0L : way.fee();
+		final Map<Integer, Long> held = new HashMap<>();
+		for (ShotCrafting.Recipe recipe : ShotCrafting.RECIPES)
+		{
+			held.put(recipe.shotItemId(), shop.onSale(recipe.saleTown(), recipe.shotItemId()));
+		}
+		final MerchantPlanner.Plan plan = MerchantPlanner.decide(bot.getRecipes(), bot.getLevel(), wanted, held, shop.hoursOfStock(), shop.maxCrafts(), bot.getAdena() - reserve - fee, shop.prices());
+		if (!learnable && (plan == null))
+		{
+			return errand; // nothing worth crafting: no errand, she keeps hunting
+		}
+		errand[0] = (plan != null) ? ("Hunters want shot " + plan.recipe().shotItemId() + " and she can make " + DecisionLog.num(plan.shots()) + " of it") : ("The recipe for shot " + learn.shotItemId() + " is in stock");
+		if (bot.getCarryCount() > 0L)
+		{
+			errand[1] = "she is still carrying goods to sell";
+		}
+		else if (!learnable && (plan.crafts() >= shop.isleMinCrafts()) && !canIsle)
+		{
+			errand[1] = "she has no way to the isle and back (a Scroll of Escape is needed)";
+		}
+		return errand;
 	}
 
 	/** @return whether this class can craft the dwarven shot recipes (Artisan and Warsmith); only the Merchant, Sateya, does */

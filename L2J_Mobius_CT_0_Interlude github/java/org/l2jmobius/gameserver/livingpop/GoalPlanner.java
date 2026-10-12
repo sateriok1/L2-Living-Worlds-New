@@ -35,6 +35,9 @@ public final class GoalPlanner
 	/** The class change comes before every other goal. */
 	public static final int CLASS_PRIORITY = 90;
 
+	/** The Merchant's craft errand: below gear (75), soulshots (60) and a zone change (65), above the trainer (50). */
+	public static final int CRAFT_PRIORITY = 55;
+
 	private GoalPlanner()
 	{
 	}
@@ -93,12 +96,20 @@ public final class GoalPlanner
 	 * @param gearErrand a gear upgrade worth a trip to town (gear kept per slot), or null
 	 * @param gearBlocker why it cannot go yet, or null
 	 * @param gearKey a stable key for that upgrade, for once-per-situation logging
+	 * @param craftErrand why the Merchant wants a trip to town to learn a recipe or craft shots the hunters want, or null
+	 * @param craftBlocker why she cannot go yet, or null
 	 */
-	public record View(int level, long adena, long potions, long soulshots, long escapes, int gearTier, boolean rewardClaimed, String zoneName, int zoneMin, int zoneMax, String betterZone, String classErrand, String classBlocker, String skillErrand, String skillBlocker, String gearErrand, String gearBlocker, String gearKey)
+	public record View(int level, long adena, long potions, long soulshots, long escapes, int gearTier, boolean rewardClaimed, String zoneName, int zoneMin, int zoneMax, String betterZone, String classErrand, String classBlocker, String skillErrand, String skillBlocker, String gearErrand, String gearBlocker, String gearKey, String craftErrand, String craftBlocker)
 	{
+		public View(int level, long adena, long potions, long soulshots, long escapes, int gearTier, boolean rewardClaimed, String zoneName, int zoneMin, int zoneMax, String betterZone, String classErrand, String classBlocker, String skillErrand, String skillBlocker, String gearErrand, String gearBlocker, String gearKey)
+		{
+			this(level, adena, potions, soulshots, escapes, gearTier, rewardClaimed, zoneName, zoneMin, zoneMax, betterZone, classErrand, classBlocker, skillErrand, skillBlocker, gearErrand, gearBlocker, gearKey, null, null);
+		}
+
+
 		public View(int level, long adena, long potions, long soulshots, long escapes, int gearTier, boolean rewardClaimed, String zoneName, int zoneMin, int zoneMax, String betterZone, String classErrand, String classBlocker, String skillErrand, String skillBlocker)
 		{
-			this(level, adena, potions, soulshots, escapes, gearTier, rewardClaimed, zoneName, zoneMin, zoneMax, betterZone, classErrand, classBlocker, skillErrand, skillBlocker, null, null, null);
+			this(level, adena, potions, soulshots, escapes, gearTier, rewardClaimed, zoneName, zoneMin, zoneMax, betterZone, classErrand, classBlocker, skillErrand, skillBlocker, null, null, null, null, null);
 		}
 
 		public View(int level, long adena, long potions, long soulshots, long escapes, int gearTier, boolean rewardClaimed, String zoneName, int zoneMin, int zoneMax, String betterZone, String classErrand, String classBlocker)
@@ -174,6 +185,13 @@ public final class GoalPlanner
 		if (view.gearErrand() != null)
 		{
 			candidates.add(new Candidate(Goal.TOWN, 75, view.gearErrand(), view.gearBlocker(), (view.gearKey() == null) ? "gear" : view.gearKey()));
+		}
+
+		// The Merchant's business: shots the hunters want, or a recipe she can learn. Below gear (her own kit comes first) and
+		// above the trainer; supplies still outrank it. Only she ever has a craft errand.
+		if (view.craftErrand() != null)
+		{
+			candidates.add(new Candidate(Goal.TOWN, CRAFT_PRIORITY, view.craftErrand(), view.craftBlocker(), "craft"));
 		}
 
 		// Soulshots: only once the bot uses them, and only for a real batch (at least half its usual stock). Without one it
