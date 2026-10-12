@@ -320,6 +320,12 @@ public final class ColdLife
 			return gearMarket(share);
 		}
 
+		/** @return whether a real player has a request or an order going with her (the hunters' wishes wait meanwhile) */
+		default boolean gearPlayerBusy()
+		{
+			return false;
+		}
+
 		/** @return the hunter (cold row) with this id, or null */
 		default ColdBot gearBot(long botId)
 		{
@@ -1214,10 +1220,7 @@ public final class ColdLife
 			resumeGearCraft(bot, active, now, context, events);
 			return true;
 		}
-		if (now < bot.getGearRestUntil())
-		{
-			return false; // the safety control: she is resting from her last craft and hunts until it is over
-		}
+		final boolean resting = now < bot.getGearRestUntil(); // the safety control: after a streak she hunts and takes no hunter's order (a player's request skips it)
 		final Random random = context.random();
 		if (bot.getGearCap() <= 0)
 		{
@@ -1228,6 +1231,10 @@ public final class ColdLife
 		final long levelFund = (lesson == null) ? 0L : Math.max(0L, lesson.adena());
 		for (GearOrders.Order wish : shop.gearWishes())
 		{
+			if (resting && (shop.gearBot(wish.botId()) != null))
+			{
+				continue;
+			}
 			// The hunter's means are read again now: with too little it is skipped and she moves on to the next in line.
 			final ColdBot wisher = shop.gearBot(wish.botId());
 			final long funds = shop.gearFunds(wish.botId());
@@ -1344,8 +1351,13 @@ public final class ColdLife
 		final Town dest = context.catalog().town(saleTown);
 		shop.gearReady(order.botId(), saleTown, now);
 		// The safety control: after her streak of orders (4 to 10, rolled when it started) she hunts for a guaranteed time before the next.
-		final int streak = bot.getGearStreak() + 1;
-		if (streak >= Math.max(1, bot.getGearCap()))
+		final boolean forPlayer = shop.gearBot(order.botId()) == null; // a player's order does not count toward her streak
+		final int streak = forPlayer ? bot.getGearStreak() : (bot.getGearStreak() + 1);
+		if (forPlayer)
+		{
+			// no change
+		}
+		else if (streak >= Math.max(1, bot.getGearCap()))
 		{
 			bot.setGearStreak(0, 0);
 			bot.setGearRestUntil(now + shop.gearParams().huntMs() + shop.gearParams().meetMs());
@@ -1998,6 +2010,10 @@ public final class ColdLife
 		if ((workshop == null) || (shop == null) || (workshop.gearParams() == null) || isMerchant(bot))
 		{
 			return;
+		}
+		if (workshop.gearPlayerBusy())
+		{
+			return; // a player's request is going: the hunters' wishes wait until it is done
 		}
 		final LivingGear.Change wish = LivingGear.wish(gear, fit, bot.getLevel(), offersIn(shop, town), shop.items());
 		if (wish == null)

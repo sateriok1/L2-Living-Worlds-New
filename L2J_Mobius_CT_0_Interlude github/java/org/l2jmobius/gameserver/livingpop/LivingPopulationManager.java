@@ -574,6 +574,30 @@ public class LivingPopulationManager
 		}
 
 		@Override
+		public boolean gearPlayerBusy()
+		{
+			if (!_requests.all().isEmpty())
+			{
+				return true;
+			}
+			for (GearOrders.Order order : _gearOrders.orders(GearOrders.State.CRAFTING))
+			{
+				if (!isBotId(order.botId()))
+				{
+					return true;
+				}
+			}
+			for (GearOrders.Order order : _gearOrders.orders(GearOrders.State.READY))
+			{
+				if (!isBotId(order.botId()))
+				{
+					return true;
+				}
+			}
+			return false;
+		}
+
+		@Override
 		public ColdBot gearBot(long botId)
 		{
 			for (ColdBot bot : _bots)
@@ -1094,7 +1118,7 @@ public class LivingPopulationManager
 		}
 	}
 
-	private static final String HELP = "I craft gear to order. Whisper me: craft <exact item name or item id> (it has to be the exact name, I can't guess) (the materials are set aside for you), cancel, status, trade (when I tell you it is ready). One request an hour.";
+	private static final String HELP = "I craft gear to order. Whisper me: craft <exact item name or item id> (it has to be the exact name, I can't guess; use the item id if the name has odd characters) (the materials are set aside for you), cancel, status, trade (when I tell you it is ready). One request an hour.";
 
 	/**
 	 * A real player's whisper to Sateya that is a command for her gear trade.
@@ -1204,7 +1228,7 @@ public class LivingPopulationManager
 		}
 		if (recipe == null)
 		{
-			return "I can only work from the exact item name (spelled exactly as the game shows it) or its item id; I can't guess. I don't know a piece called that.";
+			return "I can only work from the exact item name, spelled exactly as the game shows it, or its item id; I can't guess. If the name has unusual characters or several items share it, give me the item id instead. I don't know a piece called that.";
 		}
 		final GearCrafting.Market market = snapshotMarket(0.7, id);
 		final GearCrafting.Quote quote = GearCrafting.quote(recipe, merchant.getLevel(), merchant.getGearRecipes(), market, sender.getAdena(), GearCrafting.SURCHARGE_MAX);
@@ -1235,7 +1259,7 @@ public class LivingPopulationManager
 		final boolean busy = (_gearOrders.crafting() != null) || (merchant.getActivity() != null && merchant.getActivity().startsWith("gear_"));
 		return "I can make that for about " + quote.price() + " adena. I've set the materials aside for you. "
 			+ (busy ? "I'm busy with another job right now; I'll message you when I'm done with it and start yours. " : "I'll start as soon as I'm next free and whisper you. ")
-			+ "When it's ready, come to me and whisper 'trade'. Whisper 'cancel' to drop it.";
+			+ "When it's ready, come to me and whisper 'trade'. Keep the adena on you: I check that you can pay when I start and again when you trade. If you haven't paid within " + (PlayerRequests.HOLD_MS / 60_000L) + " minutes of it being ready, I cancel the order (any advance goes back to you) and keep the materials. Whisper 'cancel' to drop it before I start.";
 	}
 
 	/** The player is with Sateya in the sale town: it pays and takes its piece. @return what she says */
