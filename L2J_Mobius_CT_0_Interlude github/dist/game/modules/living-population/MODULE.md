@@ -198,4 +198,6 @@ An Artisan or Warsmith cold bot supplies the D and C soulshots and blessed spiri
 
 ## Named bots
 
+Titles: Sateya "The Merchant", aiSateriok "Dev God", aiSonOfZion "Bot Torturer", aiTeras "Administrator" (shown while they are live characters).
+
 The first birth wave also adds four named bots, each only if no bot or character already has the name: Sateya (the Merchant, above), aiSateriok (a male human Fighter who always becomes a Warrior, Gladiator and Duelist, with no other special behavior), aiSonOfZion (a man: half the time a human Mystic who becomes a Cleric and a Bishop, half an Orc Fighter who becomes a Titan) and aiTeras (a random race and starting class). If a character already uses one of the names, that bot is not born and a warning is logged.

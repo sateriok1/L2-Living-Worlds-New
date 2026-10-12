@@ -94,8 +94,50 @@ public final class ColdSeedPlan
 	/** A friend's name: a bot of a random race and class, born with the first wave. */
 	public static final String FRIEND = "aiTeras";
 
+	/**
+	 * @param name a bot's name
+	 * @return the custom title that bot wears in the world, or null for none
+	 */
+	public static String titleOf(String name)
+	{
+		if (OWNER.equalsIgnoreCase(name))
+		{
+			return "Dev God";
+		}
+		if (ZION.equalsIgnoreCase(name))
+		{
+			return "Bot Torturer";
+		}
+		if (FRIEND.equalsIgnoreCase(name))
+		{
+			return "Administrator";
+		}
+		return ShotCrafting.MERCHANT.equalsIgnoreCase(name) ? ShotCrafting.MERCHANT_TITLE : null;
+	}
+
 	private ColdSeedPlan()
 	{
+	}
+
+	/**
+	 * @param name a bot's name
+	 * @return the custom title the named bots carry in the world, or null
+	 */
+	public static String title(String name)
+	{
+		if (ShotCrafting.MERCHANT.equalsIgnoreCase(name))
+		{
+			return ShotCrafting.MERCHANT_TITLE;
+		}
+		if (OWNER.equalsIgnoreCase(name))
+		{
+			return "Dev God";
+		}
+		if (ZION.equalsIgnoreCase(name))
+		{
+			return "Bot Torturer";
+		}
+		return FRIEND.equalsIgnoreCase(name) ? "The Admin" : null;
 	}
 
 	/** How much more experience the three named bots earn in the cold simulation (30%), until they are within a level of the top. */

@@ -2698,9 +2698,10 @@ public class PhantomManager implements IXmlReader
 			}
 		}
 
-		if (org.l2jmobius.gameserver.livingpop.ShotCrafting.MERCHANT.equalsIgnoreCase(phantom.getName()))
+		final String customTitle = org.l2jmobius.gameserver.livingpop.ColdSeedPlan.titleOf(phantom.getName());
+		if (customTitle != null)
 		{
-			phantom.setTitle(org.l2jmobius.gameserver.livingpop.ShotCrafting.MERCHANT_TITLE); // Sateya's title, kept on every spawn
+			phantom.setTitle(customTitle); // the named bots' titles (Sateya, aiSateriok, aiSonOfZion, aiTeras), kept on every spawn
 		}
 
 		// The cold row is the source of truth: bring the character up to the row's level even when reloaded (it may be
