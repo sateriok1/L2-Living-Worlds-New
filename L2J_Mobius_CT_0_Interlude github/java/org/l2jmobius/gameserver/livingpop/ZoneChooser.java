@@ -88,8 +88,13 @@ public final class ZoneChooser
 	 * @param hasEscape whether the bot carries a Scroll of Escape. Without one it does not go where there is no way home on foot
 	 *            or by gatekeeper (an island without a town; see {@link #needsEscape})
 	 */
-	public record Situation(int level, String race, Zone currentZone, Town town, long budget, Map<String, Integer> occupancy, int capacity, String avoid, boolean freeTeleport, boolean hasEscape)
+	public record Situation(int level, String race, Zone currentZone, Town town, long budget, Map<String, Integer> occupancy, int capacity, String avoid, boolean freeTeleport, boolean hasEscape, String wary)
 	{
+		public Situation(int level, String race, Zone currentZone, Town town, long budget, Map<String, Integer> occupancy, int capacity, String avoid, boolean freeTeleport, boolean hasEscape)
+		{
+			this(level, race, currentZone, town, budget, occupancy, capacity, avoid, freeTeleport, hasEscape, null);
+		}
+
 		public Situation(int level, String race, Zone currentZone, Town town, long budget, Map<String, Integer> occupancy, int capacity)
 		{
 			this(level, race, currentZone, town, budget, occupancy, capacity, null, false, true);
@@ -103,6 +108,12 @@ public final class ZoneChooser
 		public Situation(int level, String race, Zone currentZone, Town town, long budget, Map<String, Integer> occupancy, int capacity, String avoid, boolean freeTeleport)
 		{
 			this(level, race, currentZone, town, budget, occupancy, capacity, avoid, freeTeleport, true);
+		}
+
+		/** @return whether the bot died once in this zone not long ago and should prefer another that fits */
+		boolean warns(Zone zone)
+		{
+			return (wary != null) && wary.equals(zone.name());
 		}
 
 		boolean avoids(Zone zone)
@@ -161,7 +172,7 @@ public final class ZoneChooser
 		// Keep the current zone while it still fits (up to OUTLEVEL_SLACK levels past its top) and is not clearly
 		// overcrowded. A zone just at its limit is kept: the bots already there do not all bounce out to another one.
 		final Zone current = situation.currentZone();
-		if ((current != null) && !current.isStarter() && !situation.avoids(current) && !situation.cannotReturnFrom(current, catalog) && (situation.level() >= current.minLevel()) && (situation.level() <= (current.maxLevel() + OUTLEVEL_SLACK)) && !overFull(current, situation))
+		if ((current != null) && !current.isStarter() && !situation.avoids(current) && !situation.warns(current) && !situation.cannotReturnFrom(current, catalog) && (situation.level() >= current.minLevel()) && (situation.level() <= (current.maxLevel() + OUTLEVEL_SLACK)) && !overFull(current, situation))
 		{
 			final Choice stay = route(current, town, catalog, situation.freeTeleport());
 			if ((stay != null) && (stay.fee() <= situation.budget()))
@@ -184,13 +195,24 @@ public final class ZoneChooser
 				(full(zone, situation) ? crowded : options).add(choice);
 			}
 		}
+		// One death in a zone is a warning: it moves on to another zone that fits when there is one. With none, it stays.
+		if (options.size() > 1)
+		{
+			final List<Choice> others = new ArrayList<>(options);
+			others.removeIf(c -> situation.warns(c.zone()));
+			if (!others.isEmpty())
+			{
+				options.clear();
+				options.addAll(others);
+			}
+		}
 		if (options.isEmpty())
 		{
 			// The zone limit is a preference, not a wall: when every zone that fits is full, the bot still travels the
 			// normal way, to the least crowded of them, so a large population spreads out instead of piling up.
 			if (crowded.isEmpty())
 			{
-				return null;
+				return starterFallback(situation, catalog); // fail-safe: nothing fits (say, a race with no newbie grounds in the data)
 			}
 			crowded.sort(Comparator.comparingInt((Choice c) -> occupancy(c.zone(), situation)).thenComparingDouble(c -> fitScore(c.zone(), situation.level())).thenComparingLong(Choice::fee));
 			return crowded.get(0);
@@ -222,6 +244,37 @@ public final class ZoneChooser
 		options.sort(Comparator.comparingDouble((Choice c) -> fitScore(c.zone(), situation.level())).thenComparingLong(Choice::fee));
 		final int pool = Math.min(3, options.size());
 		return options.get((random == null) ? 0 : random.nextInt(pool));
+	}
+
+	/**
+	 * The last resort for a young bot nothing else suits: the newbie grounds of any race nearest its town that it can still
+	 * use and afford. It runs only when no zone fits at all, so a bot whose race has no grounds of its own (a typo in the
+	 * data, a new race) is never left standing where it is.
+	 * @return the choice, or null when there are no newbie grounds it can use
+	 */
+	private static Choice starterFallback(Situation situation, ZoneCatalog catalog)
+	{
+		Choice nearest = null;
+		double nearestDistance = Double.MAX_VALUE;
+		for (Zone zone : catalog.zones())
+		{
+			if (!zone.isStarter() || (situation.level() > zone.maxLevel()) || situation.avoids(zone))
+			{
+				continue;
+			}
+			final Choice choice = route(zone, situation.town(), catalog, situation.freeTeleport());
+			if ((choice == null) || (choice.fee() > situation.budget()))
+			{
+				continue;
+			}
+			final double distance = zone.center().distance(situation.town().arrival());
+			if (distance < nearestDistance)
+			{
+				nearest = choice;
+				nearestDistance = distance;
+			}
+		}
+		return nearest;
 	}
 
 	/**

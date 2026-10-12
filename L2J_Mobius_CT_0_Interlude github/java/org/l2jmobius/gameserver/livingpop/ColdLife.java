@@ -587,6 +587,45 @@ public final class ColdLife
 	}
 
 	/**
+	 * What a bot needs from town, read in one place: the planner's errands (class change, skills, gear, the Merchant's craft)
+	 * and whether a class change is pending (which also keeps it out of raids). Each errand is the reason (null when there is
+	 * none), then the blocker (null when it can go now). The planner and the raid director both read this, so they can not
+	 * disagree about what a bot owes itself.
+	 * @param classErrand the class change errand
+	 * @param skillErrand the skills errand
+	 * @param gearErrand the gear errand
+	 * @param craftErrand the Merchant's craft errand
+	 * @param classPending whether its class change is still to do
+	 */
+	public record Needs(String[] classErrand, String[] skillErrand, String[] gearErrand, String[] craftErrand, boolean classPending)
+	{
+		/** @return whether any errand is open and not blocked */
+		public boolean anyOpen()
+		{
+			for (String[] errand : new String[][] {classErrand, skillErrand, gearErrand, craftErrand})
+			{
+				if ((errand[0] != null) && (errand[1] == null))
+				{
+					return true;
+				}
+			}
+			return false;
+		}
+	}
+
+	/**
+	 * @param bot the bot
+	 * @param town the town it would go to (null when it has none; errands then read as none)
+	 * @param context the shared context
+	 * @param now the time
+	 * @return its needs
+	 */
+	public static Needs needsOf(ColdBot bot, Town town, Context context, long now)
+	{
+		return new Needs(classErrand(bot, town, context), skillErrand(bot, town, context), gearErrand(bot, town, context, now), craftErrand(bot, town, context), classChangePending(bot, context));
+	}
+
+	/**
 	 * A bot with a class change to do (its quest under way, or its level due for the next one) is not asked to raid: the class
 	 * change comes first.
 	 * @param bot the bot
@@ -694,10 +733,11 @@ public final class ColdLife
 
 		final SupplyPlanner.Prices prices = context.priceBook().prices(bot.getLevel(), bot.getGearTier(), bot.getClassId());
 		// It plans with what it will have once its loot is sold, which it does first thing in town.
-		final String[] classErrand = classErrand(bot, town, context);
-		final String[] skillErrand = skillErrand(bot, town, context);
-		final String[] gearErrand = gearErrand(bot, town, context, now);
-		final String[] craftErrand = craftErrand(bot, town, context);
+		final Needs needs = needsOf(bot, town, context, now);
+		final String[] classErrand = needs.classErrand();
+		final String[] skillErrand = needs.skillErrand();
+		final String[] gearErrand = needs.gearErrand();
+		final String[] craftErrand = needs.craftErrand();
 		final GoalPlanner.View view = new GoalPlanner.View(bot.getLevel(), purse(bot), bot.getPotions(), bot.getSoulshots(), bot.getEscapes(), bot.getGearTier(), bot.isRewardClaimed(), (zone == null) ? null : zone.name(), (zone == null) ? 0 : zone.minLevel(), (zone == null) ? 0 : zone.maxLevel(), betterZone, classErrand[0], classErrand[1], skillErrand[0], skillErrand[1], gearErrand[0], gearErrand[1], gearErrand[2], craftErrand[0], craftErrand[1]);
 		final GoalPlanner.Plan plan = GoalPlanner.plan(view, prices, supplyFor(bot, context), LivingSupplies.isMystic(bot.getClassId()));
 		bot.setGoal(goalLabel(plan.chosen().goal()));
@@ -865,7 +905,7 @@ public final class ColdLife
 		bot.setRisk(after);
 
 		final String why = danger.reasons().isEmpty() ? "" : (" (" + String.join(", ", danger.reasons()) + ")");
-		events.add(new DecisionLog.Event(null, "Died in " + zone.name() + why + " and lost " + DecisionLog.num(lost) + " exp. Went back to " + town.name() + " to recover"));
+		events.add(new DecisionLog.Event(null, "Died in " + zone.name() + why + " and lost " + DecisionLog.num(lost) + " exp. Went back to " + town.name() + " to recover" + (avoidsNow ? "" : (". Wary of " + zone.name() + " now: picks another zone that fits if there is one"))));
 		if (avoidsNow)
 		{
 			events.add(new DecisionLog.Event(null, "Died twice in " + zone.name() + ": stays away from it for " + minutes(risk.avoidMs()) + " and picks easier zones meanwhile"));
@@ -2650,7 +2690,9 @@ public final class ColdLife
 		final ColdRisk.State risk = bot.getRisk();
 		final boolean avoiding = risk.avoiding(now);
 		final int level = avoiding ? Math.max(1, bot.getLevel() - ColdRisk.AVOID_LEVEL_PENALTY) : bot.getLevel();
-		return new ZoneChooser.Situation(level, bot.getRace(), current, town, budget, occupancy, context.travel().zoneCapacity(), avoiding ? risk.avoidZone() : null, freeTeleport(bot, context), bot.getEscapes() > 0);
+		final ColdRisk.Params riskParams = context.risk();
+		final String wary = (!avoiding && (riskParams != null) && (risk.deathZone() != null) && (risk.zoneDeaths() > 0) && ((now - risk.lastDeathAt()) < riskParams.avoidMs())) ? risk.deathZone() : null;
+		return new ZoneChooser.Situation(level, bot.getRace(), current, town, budget, occupancy, context.travel().zoneCapacity(), avoiding ? risk.avoidZone() : null, freeTeleport(bot, context), bot.getEscapes() > 0, wary);
 	}
 
 	private static String planKey(GoalPlanner.Plan plan)

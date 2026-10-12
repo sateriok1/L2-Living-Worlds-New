@@ -106,6 +106,7 @@ public class LivingTravelTest
 		testLootSale();
 		testColdRisk();
 		testColdDeathAndRest();
+		testWaryAfterDeath();
 		testLivingChat();
 		testClassPath();
 		testClassChange();
@@ -292,6 +293,19 @@ public class LivingTravelTest
 		check("keeps a zone that still fits", "Near Woods".equals(keep.zone().name()));
 		final ZoneChooser.Choice slack = ZoneChooser.choose(new ZoneChooser.Situation(24, "Elf", catalog.zone("Near Woods"), alpha, 100_000L, null, 0), catalog, null);
 		check("keeps it up to four levels past its top", "Near Woods".equals(slack.zone().name()));
+
+		// Fail-safe: a young bot whose race has no newbie grounds of its own still gets somewhere to hunt.
+		final ZoneChooser.Choice lost = ZoneChooser.choose(new ZoneChooser.Situation(5, "Dark Elf", null, alpha, 100_000L, null, 0), catalog, null);
+		check("a race with no newbie grounds falls back to the nearest ones", (lost != null) && "Newbie Field".equals(lost.zone().name()));
+		check("and a high-level bot nothing fits is still left alone", ZoneChooser.choose(new ZoneChooser.Situation(90, "Dark Elf", null, alpha, 100_000L, null, 0), catalog, null) == null);
+
+		// One death is a warning: it moves on to another zone that fits, and stays when nothing else fits.
+		final ZoneChooser.Choice wary = ZoneChooser.choose(new ZoneChooser.Situation(18, "Elf", catalog.zone("Near Woods"), alpha, 100_000L, null, 0, null, false, true, "Near Woods"), catalog, null);
+		check("after one death in a zone it picks another that fits", (wary != null) && !"Near Woods".equals(wary.zone().name()));
+		final ZoneChooser.Choice onlyOne = ZoneChooser.choose(new ZoneChooser.Situation(12, "Elf", catalog.zone("Near Woods"), alpha, 100_000L, null, 0, null, false, true, "Near Woods"), catalog, null);
+		check("but stays when no other zone fits", (onlyOne != null) && "Near Woods".equals(onlyOne.zone().name()));
+		final ZoneChooser.Choice notWary = ZoneChooser.choose(new ZoneChooser.Situation(18, "Elf", catalog.zone("Near Woods"), alpha, 100_000L, null, 0, null, false, true, "Far Hills"), catalog, null);
+		check("a warning about another zone changes nothing", "Near Woods".equals(notWary.zone().name()));
 
 		// Level 18 with no zone: Far Hills is the better fit on levels, but it is far from the human newbie grounds.
 		final ZoneChooser.Choice elf = ZoneChooser.choose(new ZoneChooser.Situation(18, "Elf", null, alpha, 100_000L, null, 0), catalog, null);
@@ -1404,6 +1418,27 @@ public class LivingTravelTest
 		return new ColdLife.Context(catalog(), supply(), travel, (level, tier) -> prices(), new HashMap<>(), new Random(7), risk, level -> 100_000L);
 	}
 
+	private static void testWaryAfterDeath() throws Exception
+	{
+		final ColdLife.Context context = riskyContext(0.0, 1_000_000_000L);
+		final ColdRisk.Params params = new ColdRisk.Params(0.0, 90_000L, 1_000_000_000L, 60_000L, 3_600_000L);
+		// Level 18 died once in Near Woods (10 to 20); Far Hills (15 to 25) also fits. Leaving town it takes Far Hills.
+		final ColdBot hurt = bot(18, "Near Woods", 100_000L, 10L, 2L, 0);
+		hurt.setRisk(ColdRisk.died(ColdRisk.State.EMPTY, "Near Woods", 0L, params));
+		hurt.setTown("Alpha");
+		hurt.setActivity(ColdLife.IN_TOWN);
+		hurt.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		runUntil(hurt, 1L, context, new ArrayList<>(), b -> !ColdLife.IN_TOWN.equals(b.getActivity()));
+		check("a bot that died once in a zone leaves town for another that fits", "Far Hills".equals(hurt.getZone()));
+		// The same bot with no death keeps its zone.
+		final ColdBot fine = bot(18, "Near Woods", 100_000L, 10L, 2L, 0);
+		fine.setTown("Alpha");
+		fine.setActivity(ColdLife.IN_TOWN);
+		fine.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		runUntil(fine, 1L, context, new ArrayList<>(), b -> !ColdLife.IN_TOWN.equals(b.getActivity()));
+		check("and one that did not keeps its zone", "Near Woods".equals(fine.getZone()));
+	}
+
 	private static void testLivingChat()
 	{
 		check("a hunting bot says where it hunts", LivingChat.activity(ColdLife.HUNTING, "Ruins of Agony", null).equals("hunting in Ruins of Agony") && LivingChat.activity(null, null, null).equals("hunting"));
@@ -1676,6 +1711,9 @@ public class LivingTravelTest
 		ColdLife.prepareForRaid(stocked, context(0), stockedLog);
 		check("one that is stocked already buys nothing", stockedLog.isEmpty() && (stocked.getAdena() == 50_000L));
 		check("one before its level, or past its class change, is", !ColdLife.classChangePending(early, classes) && !ColdLife.classChangePending(done, classes) && !ColdLife.classChangePending(due, context(0)));
+		final ColdLife.Needs owed = ColdLife.needsOf(due, null, classes, 0L);
+		check("the needs snapshot reports the pending class change that keeps a bot out of raids", owed.classPending() && !owed.anyOpen());
+		check("a bot with no town has no errands", (owed.classErrand()[0] == null) && (owed.craftErrand()[0] == null));
 	}
 
 	/** The whole trip worked out before setting out, potions on the way, a class change that cuts a break short, and zones reached through chains of gatekeepers. */

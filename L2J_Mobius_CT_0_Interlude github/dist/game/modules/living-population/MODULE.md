@@ -177,6 +177,12 @@ keeps it.
 | `SnapshotIntervalSeconds` | How often the monitoring snapshot is written. |
 | `SnapshotFile` | Path of the monitoring JSON snapshot. |
 
+**Early warning.** One death in a zone is already a warning: for `AvoidZoneMinutes` the bot prefers another zone that fits its level (it picks it when leaving town to recover) and stays only if nothing else fits. A second death there still makes it avoid the zone and hunt two levels lower.
+
+**Fail-safe.** A young bot nothing else suits (its race has no newbie grounds in the data) goes to the nearest newbie grounds it can use instead of standing still.
+
+**One list of needs.** `ColdLife.needsOf` reads a bot's errands (class change, skills, gear, the Merchant's craft) and whether a class change is pending in one place; the goal planner and the raid director both read it.
+
 
 Town stock (`TownStock`, table `living_town_listings`): the sellable items bots hunt (cold bots from the zone's drop lists and rates, hot bots from the real items in their bag; weapons and armor are left out of the cold count) go into the stock of the town they sell in, each kept as the hunting bot's own listing, like a back-end auction house. A bot is not paid when items drop. It is paid when they sell, or when the stock clears: every status snapshot, a share of each listing (half of it every `TownStockHalfLifeHours`, default 6) is vendored and its owner gets the vendor price. The fake-player SELL and PACKAGE vendors within 6000 units of a town's arrival point sell only that town's stock (no rolled goods): a vendor opens a shop once the town has at least two different items for it, checks every 30 seconds, trims its lines as the goods go and closes when they are gone. When a player buys a line, the items leave the stock and the adena goes to the bots they belonged to, split by how many each owned: added to the live character when the bot is in the world, else to its row (the shop price is 1.0 to 1.4 times the reference price, so it pays more than the vendor). BUY, Ancient Adena, craft and chat-arranged deal stores are not changed. With the module off, the SELL and PACKAGE vendors roll their own stock as they did before (shots, materials and gear). The stock is saved with each status snapshot and written to `LivingPopulation-townstock.json` next to it.
 
