@@ -72,6 +72,9 @@ public final class PlayerRequests
 	/** The least time between two requests from one player, kept whether the first was filled, cancelled or lapsed, so no one can tie her up. */
 	public static final long COOLDOWN_MS = 60 * 60_000L;
 
+	/** After a request she cannot make, the player may ask again in this long. */
+	public static final long DENIED_COOLDOWN_MS = 5 * 60_000L;
+
 	private final Map<Long, Long> _lastOpened = new LinkedHashMap<>();
 	private final Map<Long, Spent> _spent = new LinkedHashMap<>();
 	private final Map<Long, Request> _requests = new LinkedHashMap<>();
@@ -82,6 +85,13 @@ public final class PlayerRequests
 	{
 		_requests.put(playerId, new Request(playerId, (name == null) ? "" : name.replace('|', ' '), level, productId, new TreeMap<>(mats), now, 0L, 0L));
 		_lastOpened.put(playerId, now);
+		_dirty = true;
+	}
+
+	/** She could not make what the player asked for: it may ask again after {@link #DENIED_COOLDOWN_MS} instead of an hour. */
+	public synchronized void deny(long playerId, long now)
+	{
+		_lastOpened.put(playerId, (now - COOLDOWN_MS) + DENIED_COOLDOWN_MS);
 		_dirty = true;
 	}
 

@@ -689,11 +689,11 @@ public class LivingPopulationManager
 				towns.add(GearCrafting.C_TOWN); // everything came from the vendors: one stop at the shops in Giran
 			}
 			_gearOrders.accept(wish.botId(), quote.price(), advance, craftMs, towns.get(towns.size() - 1), now);
+			// What she laid out stays on record until the order is paid: if nobody pays, she is refunded and keeps the materials.
+			_requests.spend(wish.botId(), quote.outlay(), toLongs(recipe.ingredients()));
 			if (_requests.remove(wish.botId()) != null)
 			{
-				// A player's order: the stock set aside is used, and what she laid out is kept on record until the player has paid.
-				_requests.spend(wish.botId(), quote.outlay(), toLongs(recipe.ingredients()));
-				tell(wish.botId(), "I have the materials and I'm starting on it now: it takes about " + Math.max(1L, craftMs / 60_000L) + " minutes. I'll whisper you when it's ready.");
+				tell(wish.botId(), "I'm done with my last job. I have the materials and I'm starting on yours now: it takes about " + Math.max(1L, craftMs / 60_000L) + " minutes. I'll whisper you when it's ready.");
 			}
 			return towns;
 		}
@@ -708,7 +708,7 @@ public class LivingPopulationManager
 				final GearCrafting.Recipe recipe = gearRecipeOf(order.productId());
 				// The piece is parked in the town's stock under her name; extra pieces of a craft stay for later orders.
 				_townStock.add(town, merchant.getId(), order.productId(), (recipe == null) ? 1L : recipe.perCraft());
-				if (_requests.spent(botId) != null)
+				if (!isBotId(botId))
 				{
 					final ItemTemplate item = ItemData.getInstance().getTemplate(order.productId());
 					tell(botId, "Your " + ((item == null) ? "piece" : item.getName()) + " is ready in " + town + ". Come to me there within " + (PlayerRequests.HOLD_MS / 60_000L) + " minutes, whisper me 'trade', and bring " + order.due() + " adena.");
@@ -913,9 +913,28 @@ public class LivingPopulationManager
 		return longs;
 	}
 
+	private boolean isBotId(long id)
+	{
+		for (ColdBot bot : _bots)
+		{
+			if (bot.getId() == id)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/** Sateya whispers a real player (nothing when it is a bot or offline). */
 	private void tell(long playerId, String text)
 	{
+		for (ColdBot bot : _bots)
+		{
+			if (bot.getId() == playerId)
+			{
+				return; // a hunter, not a player
+			}
+		}
 		whisper(World.getInstance().getPlayer((int) playerId), ShotCrafting.MERCHANT, text);
 	}
 
@@ -980,7 +999,7 @@ public class LivingPopulationManager
 		// A player that has not come for its piece in an hour: she is refunded and keeps the materials.
 		for (GearOrders.Order late : _gearOrders.orders(GearOrders.State.READY))
 		{
-			if ((_requests.spent(late.botId()) != null) && ((now - late.at()) > PlayerRequests.HOLD_MS) && (_gearOrders.remove(late.botId()) != null))
+			if ((_requests.spent(late.botId()) != null) && ((now - late.at()) > PlayerRequests.HOLD_MS) && !isBotId(late.botId()) && (_gearOrders.remove(late.botId()) != null))
 			{
 				lapse(late, merchant);
 			}
@@ -1075,7 +1094,7 @@ public class LivingPopulationManager
 		}
 	}
 
-	private static final String HELP = "I craft gear to order. Whisper me: craft <item name or id> (the materials are set aside for you), cancel, status, trade (when I tell you it is ready). One request an hour.";
+	private static final String HELP = "I craft gear to order. Whisper me: craft <exact item name or item id> (it has to be the exact name, I can't guess) (the materials are set aside for you), cancel, status, trade (when I tell you it is ready). One request an hour.";
 
 	/**
 	 * A real player's whisper to Sateya that is a command for her gear trade.
@@ -1107,7 +1126,7 @@ public class LivingPopulationManager
 				final PlayerRequests.Request request = _requests.of(id);
 				if (request != null)
 				{
-					_gearOrders.wish(id, 999, request.productId(), sender.getAdena(), now); // first in line now
+					_gearOrders.wish(id, PLAYER_PRIORITY, request.productId(), sender.getAdena(), now); // first in line now
 				}
 				answer = "Good, I'll start on it as soon as I'm free.";
 			}
@@ -1185,13 +1204,15 @@ public class LivingPopulationManager
 		}
 		if (recipe == null)
 		{
-			return "I don't know that piece. Give me its exact name or item id.";
+			return "I can only work from the exact item name (spelled exactly as the game shows it) or its item id; I can't guess. I don't know a piece called that.";
 		}
 		final GearCrafting.Market market = snapshotMarket(0.7, id);
 		final GearCrafting.Quote quote = GearCrafting.quote(recipe, merchant.getLevel(), merchant.getGearRecipes(), market, sender.getAdena(), GearCrafting.SURCHARGE_MAX);
 		if (quote == null)
 		{
-			return (GearCrafting.quote(recipe, merchant.getLevel(), merchant.getGearRecipes(), market, Long.MAX_VALUE, GearCrafting.SURCHARGE_MAX) == null) ? "I can't make that right now." : "That would cost more than you have on you.";
+			final boolean possible = GearCrafting.quote(recipe, merchant.getLevel(), merchant.getGearRecipes(), market, Long.MAX_VALUE, GearCrafting.SURCHARGE_MAX) != null;
+			_requests.deny(id, now);
+			return (possible ? "That would cost more than you have on you." : "I can't make that right now.") + " You can ask me again in " + (PlayerRequests.DENIED_COOLDOWN_MS / 60_000L) + " minutes.";
 		}
 		final Map<Integer, Long> mats = new HashMap<>();
 		recipe.ingredients().forEach((item, count) -> {
@@ -1210,8 +1231,11 @@ public class LivingPopulationManager
 			}
 		}
 		_requests.open(id, sender.getName(), sender.getLevel(), recipe.productId(), mats, now);
-		_gearOrders.wish(id, sender.getLevel(), recipe.productId(), sender.getAdena(), now);
-		return "I can make that for about " + quote.price() + " adena. I've set the materials aside for you. I'll start when it's your turn in my queue and whisper you when it's ready; then come to me and whisper 'trade'. Whisper 'cancel' to drop it.";
+		_gearOrders.wish(id, PLAYER_PRIORITY, recipe.productId(), sender.getAdena(), now); // a player's own request goes ahead of the hunters' queue
+		final boolean busy = (_gearOrders.crafting() != null) || (merchant.getActivity() != null && merchant.getActivity().startsWith("gear_"));
+		return "I can make that for about " + quote.price() + " adena. I've set the materials aside for you. "
+			+ (busy ? "I'm busy with another job right now; I'll message you when I'm done with it and start yours. " : "I'll start as soon as I'm next free and whisper you. ")
+			+ "When it's ready, come to me and whisper 'trade'. Whisper 'cancel' to drop it.";
 	}
 
 	/** The player is with Sateya in the sale town: it pays and takes its piece. @return what she says */
@@ -1225,9 +1249,20 @@ public class LivingPopulationManager
 		}
 		final ColdLife.Context life = _handoff.life();
 		final ZoneCatalog.Town town = (life == null) ? null : life.catalog().town(order.town());
-		if ((town == null) || (town.arrival().distance(new ZoneCatalog.Point(sender.getX(), sender.getY(), sender.getZ())) > TRADE_RANGE))
+		if (town == null)
 		{
 			return "Come to " + order.town() + " first, then whisper 'trade'.";
+		}
+		// Within 3000 units of her while she is in the town (her live character if she has one), else of the town's arrival point.
+		ZoneCatalog.Point meet = town.arrival();
+		if (order.town().equals(bot.getTown()))
+		{
+			final Player live = PhantomManager.getInstance().livingPopulationPhantoms().get(bot.getId());
+			meet = (live != null) ? new ZoneCatalog.Point(live.getX(), live.getY(), live.getZ()) : new ZoneCatalog.Point(bot.getX(), bot.getY(), bot.getZ());
+		}
+		if (meet.distance(new ZoneCatalog.Point(sender.getX(), sender.getY(), sender.getZ())) > TRADE_RANGE)
+		{
+			return "Come to " + order.town() + " first (within " + (int) TRADE_RANGE + " of me), then whisper 'trade'.";
 		}
 		if (sender.getAdena() < order.due())
 		{
@@ -1246,8 +1281,10 @@ public class LivingPopulationManager
 		return "Pleasure doing business. Take care of it.";
 	}
 
-	// How close a player must be to the town's arrival point to trade with her.
+	// How close a player must be to Sateya (or the town's arrival point when she has left it) to trade with her.
 	private static final double TRADE_RANGE = 3000.0;
+	// A player's request goes first in her queue.
+	private static final int PLAYER_PRIORITY = 998;
 
 	/**
 	 * @return the unit price a shot sells at in a shop: its production cost plus 1 once the shop holds enough shots for

@@ -995,6 +995,8 @@ public class LivingTravelTest
 		final long late = t0 + PlayerRequests.ASK_AFTER_MS + PlayerRequests.ANSWER_MS + 1;
 		check("silence is a no and frees the stock", (book.expire(late).size() == 1) && (book.of(8) == null) && (book.of(7) != null) && (book.reserved(-1L).get(1) == 5L));
 		check("a confirmed request that is never started lapses", book.expire(t0 + PlayerRequests.ASK_AFTER_MS + 1000L + PlayerRequests.CONFIRMED_LIFE_MS + 1).size() == 1);
+		book.deny(31, t0);
+		check("a request she cannot make may be tried again in 5 minutes", (book.cooldownLeft(31, t0) == PlayerRequests.DENIED_COOLDOWN_MS) && (book.cooldownLeft(31, t0 + PlayerRequests.DENIED_COOLDOWN_MS) == 0L));
 		check("one request an hour, even after it lapsed", (book.cooldownLeft(7, t0 + 1000L) > 0L) && (book.cooldownLeft(7, t0 + PlayerRequests.COOLDOWN_MS) == 0L) && (book.cooldownLeft(99, t0) == 0L));
 		book.spend(9, 5000L, Map.of(3, 2L));
 		final PlayerRequests copy = new PlayerRequests();
