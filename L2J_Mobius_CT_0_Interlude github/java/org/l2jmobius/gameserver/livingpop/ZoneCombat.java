@@ -635,7 +635,7 @@ public final class ZoneCombat
 
 	/**
 	 * A damage dealer's sustained damage a second against one big target (a raid boss), from the class's rotation over the
-	 * longest window, with the shots it fires. Buffs are not in it (see {@link #raidBuff}).
+	 * longest window, with the shots it fires and the baseline buffs every bot is taken to have in cold hunting ({@code buff(role, 0, level)}); a buffer in the team adds on top of that (see {@link #raidBuff}).
 	 * @param boss the boss as a one-monster zone (its HP, P.Def and M.Def)
 	 * @return damage a second, 0 when the model is off
 	 */
@@ -647,7 +647,7 @@ public final class ZoneCombat
 		}
 		final Role role = roleOf(classId);
 		final double self = (stats.selfBuffs() < 0) ? -1.0 : stats.selfBuffs();
-		return rotationDps(boss, role, classId, level, stats.attack(), skillFraction, self, ROTATION_WINDOWS.length - 1) * shotDamage(role, shotFraction, blessed);
+		return rotationDps(boss, role, classId, level, stats.attack(), skillFraction, self, ROTATION_WINDOWS.length - 1) * shotDamage(role, shotFraction, blessed) * buff(role, 0, level);
 	}
 
 	/**
@@ -688,11 +688,20 @@ public final class ZoneCombat
 		return (level < 20) ? POTION_HEAL_LESSER : POTION_HEAL;
 	}
 
-	/** @return the damage multiple a buffer class gives a melee party at the level (1 for a class that is not a buffer) */
+	/**
+	 * @return the damage multiple a buffer class adds to a melee party at the level over the baseline buffs every bot already has (1 for a class that is not a buffer,
+	 *         or one whose buffs are no better than the baseline)
+	 */
 	public double raidBuff(int classId, int level)
 	{
 		final String line = BUFFER_OF.get(classId);
-		return (line == null) ? 1.0 : partyBuff(line, Role.MELEE, 0, level);
+		return (line == null) ? 1.0 : Math.max(1.0, partyBuff(line, Role.MELEE, 0, level) / buff(Role.MELEE, 0, level));
+	}
+
+	/** @return the P.Def multiple the baseline buffs give a class at the level (the same one cold hunting uses for its death rate) */
+	public double raidDefence(int classId, int level)
+	{
+		return buff(roleOf(classId), 1, level);
 	}
 
 	/** @return the HP a second a healer class heals in a long fight with the heals it has learned at the level (0 without data) */

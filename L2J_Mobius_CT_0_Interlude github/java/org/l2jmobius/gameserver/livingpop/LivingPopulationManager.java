@@ -2177,7 +2177,7 @@ public class LivingPopulationManager
 			final double plain = fights ? _model.raidDps(zone, bot.getClassId(), level, stats, skills, 0.0, usesBlessed(bot)) : 0.0;
 			final double shot = (fights && (shotSeconds > 0.0)) ? _model.raidDps(zone, bot.getClassId(), level, stats, skills, 1.0, usesBlessed(bot)) : plain;
 			final RaidPlanner.Seat role = (seat == 0) ? RaidPlanner.Seat.TANK : (seat == 3) ? RaidPlanner.Seat.HEALER : (seat == 2) ? RaidPlanner.Seat.BUFFER : RaidPlanner.Seat.DAMAGE;
-			return new RaidPlanner.Member(bot.getId(), role, shot, template.getBaseHpMax(level), stats.pDef(), (seat == 3) ? _model.raidHealPerSecond(bot.getClassId(), level, stats.attack()) : 0.0, (seat == 2) ? _model.raidBuff(bot.getClassId(), level) : 1.0, plain, shotSeconds, potionHps, potionSeconds);
+			return new RaidPlanner.Member(bot.getId(), role, shot, template.getBaseHpMax(level), stats.pDef() * _model.raidDefence(bot.getClassId(), level), (seat == 3) ? _model.raidHealPerSecond(bot.getClassId(), level, stats.attack()) : 0.0, (seat == 2) ? _model.raidBuff(bot.getClassId(), level) : 1.0, plain, shotSeconds, potionHps, potionSeconds);
 		}
 
 		@Override
