@@ -20,6 +20,7 @@ package org.l2jmobius.gameserver.livingpop;
 
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 import org.l2jmobius.gameserver.modules.Json;
 
@@ -84,6 +85,7 @@ public class ColdBot
 	private volatile long _adenaEarned;
 	private volatile long _shoppedAt; // when it last finished its errands in town (0 = never), kept with the counters
 	private volatile int _shotItem; // the shot item its soulshot stock is of (0 = not noted yet), kept with the counters
+	private volatile Set<Integer> _gearRecipes = Set.of(); // a Merchant: the recipe items of the gear she has learned to craft
 	private volatile int _recipes; // a Merchant: bits of the shot recipes it has learned (ShotCrafting.bit), kept with the counters
 	private volatile int _carryItem; // a Merchant: the shots it crafted and has yet to put on sale
 	private volatile long _carryCount;
@@ -526,6 +528,20 @@ public class ColdBot
 		_recipes = Math.max(0, recipes);
 	}
 
+	/** @return the recipe items of the gear this bot has learned to craft */
+	public Set<Integer> getGearRecipes()
+	{
+		return _gearRecipes;
+	}
+
+	/** @param recipeItemId a gear recipe item this bot has learned */
+	public synchronized void addGearRecipe(int recipeItemId)
+	{
+		final Set<Integer> next = new java.util.TreeSet<>(_gearRecipes);
+		next.add(recipeItemId);
+		_gearRecipes = Set.copyOf(next);
+	}
+
 	/** @return the shot item a Merchant carries to its shop, or 0 */
 	public int getCarryItem()
 	{
@@ -574,11 +590,11 @@ public class ColdBot
 	public String getStatsJson()
 	{
 		final String decisions = _decisions.toJson();
-		if ((_kills <= 0.0) && (_adenaEarned <= 0L) && (_shoppedAt <= 0L) && (_recipes == 0) && (_carryCount <= 0L) && (_shotItem == 0))
+		if ((_kills <= 0.0) && (_adenaEarned <= 0L) && (_shoppedAt <= 0L) && (_recipes == 0) && _gearRecipes.isEmpty() && (_carryCount <= 0L) && (_shotItem == 0))
 		{
 			return decisions;
 		}
-		return decisions.substring(0, decisions.length() - 1) + ",\"counters\":{\"kills\":" + String.format(Locale.US, "%.1f", _kills) + ",\"adena\":" + _adenaEarned + ((_shoppedAt > 0L) ? (",\"shoppedAt\":" + _shoppedAt) : "") + ((_recipes != 0) ? (",\"recipes\":" + _recipes) : "") + ((_shotItem != 0) ? (",\"shotItem\":" + _shotItem) : "") + ((_carryCount > 0L) ? (",\"carryItem\":" + _carryItem + ",\"carryCount\":" + _carryCount + ",\"carryTown\":\"" + _carryTown + "\"") : "") + "}}";
+		return decisions.substring(0, decisions.length() - 1) + ",\"counters\":{\"kills\":" + String.format(Locale.US, "%.1f", _kills) + ",\"adena\":" + _adenaEarned + ((_shoppedAt > 0L) ? (",\"shoppedAt\":" + _shoppedAt) : "") + ((_recipes != 0) ? (",\"recipes\":" + _recipes) : "") + (_gearRecipes.isEmpty() ? "" : (",\"gearRecipes\":" + new java.util.TreeSet<>(_gearRecipes))) + ((_shotItem != 0) ? (",\"shotItem\":" + _shotItem) : "") + ((_carryCount > 0L) ? (",\"carryItem\":" + _carryItem + ",\"carryCount\":" + _carryCount + ",\"carryTown\":\"" + _carryTown + "\"") : "") + "}}";
 	}
 
 	/**
@@ -592,6 +608,7 @@ public class ColdBot
 		_adenaEarned = 0L;
 		_shoppedAt = 0L;
 		_recipes = 0;
+		_gearRecipes = Set.of();
 		_shotItem = 0;
 		setCarry(0, 0L, null);
 		if ((statsJson == null) || statsJson.isBlank())
@@ -622,6 +639,18 @@ public class ColdBot
 				if (counters.get("recipes") instanceof Number recipes)
 				{
 					_recipes = Math.max(0, recipes.intValue());
+				}
+				if (counters.get("gearRecipes") instanceof java.util.List<?> list)
+				{
+					final Set<Integer> learned = new java.util.TreeSet<>();
+					for (Object entry : list)
+					{
+						if (entry instanceof Number number)
+						{
+							learned.add(number.intValue());
+						}
+					}
+					_gearRecipes = Set.copyOf(learned);
 				}
 				if ((counters.get("carryItem") instanceof Number item) && (counters.get("carryCount") instanceof Number count) && (counters.get("carryTown") instanceof String town))
 				{

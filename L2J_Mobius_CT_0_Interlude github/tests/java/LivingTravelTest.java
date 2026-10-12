@@ -36,6 +36,7 @@ import org.l2jmobius.gameserver.livingpop.DropYield;
 import org.l2jmobius.gameserver.livingpop.MerchantPlanner;
 import org.l2jmobius.gameserver.livingpop.RaidLoot;
 import org.l2jmobius.gameserver.livingpop.RaidPlanner;
+import org.l2jmobius.gameserver.livingpop.GearCrafting;
 import org.l2jmobius.gameserver.livingpop.RaidStats;
 import org.l2jmobius.gameserver.livingpop.ShotCrafting;
 import org.l2jmobius.gameserver.livingpop.ShotDemand;
@@ -95,6 +96,7 @@ public class LivingTravelTest
 		testMerchant();
 		testRaids();
 		testRaidStats();
+		testGearCrafting();
 		testLootSale();
 		testColdRisk();
 		testColdDeathAndRest();
@@ -883,6 +885,67 @@ public class LivingTravelTest
 		check("nothing is lost when the loot is shared", (adena == 1003L) && (total == 1003L + 300L + 500L));
 		check("the shares are as even as whole items allow", (high - low) <= 301L);
 		check("every member gets an item", shares.stream().allMatch(s -> s.stream().anyMatch(d -> d.itemId() != 57)));
+	}
+
+	private static GearCrafting.Market market(Map<Integer, Long> stock, Map<Integer, Long> reference, Map<Integer, Long> vendor)
+	{
+		return new GearCrafting.Market()
+		{
+			@Override
+			public long inStock(int itemId)
+			{
+				return stock.getOrDefault(itemId, 0L);
+			}
+
+			@Override
+			public long referencePrice(int itemId)
+			{
+				return reference.getOrDefault(itemId, 0L);
+			}
+
+			@Override
+			public long vendorPrice(int itemId)
+			{
+				return vendor.getOrDefault(itemId, 0L);
+			}
+		};
+	}
+
+	private static void testGearCrafting()
+	{
+		// A D piece (product 100, recipe 900) made from 4 of item 1 (reference 100) and 2 of item 2 (reference 500); the piece itself references 5000.
+		final GearCrafting.Recipe d = new GearCrafting.Recipe(900, 100, 1, Map.of(1, 4, 2, 2), 1);
+		final GearCrafting.Recipe c = new GearCrafting.Recipe(901, 101, 1, Map.of(1, 1), 2);
+		final Map<Integer, Long> reference = Map.of(1, 100L, 2, 500L, 100, 5000L, 101, 9000L, 900, 1000L, 901, 1000L);
+		final Map<Integer, Long> stock = Map.of(1, 10L, 2, 10L, 900, 1L, 901, 1L);
+		final GearCrafting.Market world = market(stock, reference, Map.of());
+
+		check("a bot is paid 60% of the reference price for stock, a vendor 50%", (GearCrafting.stockPrice(1000L) == 600L) && (GearCrafting.stockPrice(1L) == 1L));
+		check("materials come out of the stock at 60%", GearCrafting.craftCost(d, world) == ((4 * 60L) + (2 * 300L)));
+		final GearCrafting.Cost mixed = GearCrafting.cost(1, 5L, market(Map.of(1, 2L), reference, Map.of(1, 150L)));
+		check("what the stock lacks comes from a vendor shop", (mixed != null) && (mixed.fromStock() == 2L) && (mixed.adena() == ((2 * 60L) + (3 * 150L))));
+		check("with neither stock nor vendor the material is not to be had", (GearCrafting.cost(1, 5L, market(Map.of(1, 2L), reference, Map.of())) == null) && (GearCrafting.craftCost(d, market(Map.of(1, 10L), reference, Map.of())) == -1L));
+		check("her price is the cost plus 10%", GearCrafting.price(d, world) == Math.round(Math.ceil(840 * 1.1)));
+		check("and at least an adena over the cost", GearCrafting.price(new GearCrafting.Recipe(902, 102, 1, Map.of(3, 1), 1), market(Map.of(3, 5L), Map.of(3, 5L), Map.of())) == 4L);
+		check("a recipe she knows costs nothing, one in the stock 60% of its reference, and one nobody has cannot be had", (GearCrafting.recipeCost(d, Set.of(900), world) == 0L) && (GearCrafting.recipeCost(d, Set.of(), world) == 600L) && (GearCrafting.recipeCost(d, Set.of(), market(Map.of(1, 10L, 2, 10L), reference, Map.of())) == -1L));
+
+		check("she can craft a D piece at level 20", GearCrafting.craftable(d, 20, Set.of(), world));
+		check("but not before the grade is open to her", !GearCrafting.craftable(d, 19, Set.of(), world) && !GearCrafting.craftable(c, 39, Set.of(), world) && GearCrafting.craftable(c, 40, Set.of(), world));
+		check("nor without a material in the towns or the vendors", !GearCrafting.craftable(d, 30, Set.of(), market(Map.of(1, 10L, 900, 1L), reference, Map.of())));
+		check("nor without a recipe to be had", !GearCrafting.craftable(d, 30, Set.of(), market(Map.of(1, 10L, 2, 10L), reference, Map.of())) && GearCrafting.craftable(d, 30, Set.of(900), market(Map.of(1, 10L, 2, 10L), reference, Map.of())));
+		check("nor a piece that costs more than its reference price", !GearCrafting.craftable(d, 30, Set.of(), market(stock, Map.of(1, 100L, 2, 500L, 100, 800L, 900, 1000L), Map.of())));
+		check("nor a piece a vendor shop already sells for less", !GearCrafting.craftable(d, 30, Set.of(), market(stock, reference, Map.of(100, 900L))) && GearCrafting.craftable(d, 30, Set.of(), market(stock, reference, Map.of(100, 4000L))));
+
+		final List<GearCrafting.Recipe> all = List.of(d, c);
+		final GearCrafting.Plan plan = GearCrafting.decide(Set.of(), 30, all, Map.of(100, 1.0), Map.of(), 1.0, 10L, 1_000_000L, world);
+		check("she crafts what a hunter wants, buying the recipe with it", (plan != null) && (plan.recipe() == d) && (plan.crafts() == 1L) && (plan.pieces() == 1L) && (plan.materials() == 840L) && (plan.recipeCost() == 600L) && (plan.cost() == 1440L));
+		check("two hunters call for two crafts", GearCrafting.decide(Set.of(900), 30, all, Map.of(100, 2.0), Map.of(), 1.0, 10L, 1_000_000L, world).crafts() == 2L);
+		check("nothing is crafted without demand, or when the shop already holds enough", (GearCrafting.decide(Set.of(), 30, all, Map.of(), Map.of(), 1.0, 10L, 1_000_000L, world) == null) && (GearCrafting.decide(Set.of(), 30, all, Map.of(100, 1.0), Map.of(100, 1L), 1.0, 10L, 1_000_000L, world) == null));
+		check("a demand she cannot craft now is passed over (a C piece at level 30)", GearCrafting.decide(Set.of(), 30, all, Map.of(101, 3.0), Map.of(), 1.0, 10L, 1_000_000L, world) == null);
+		check("she does not spend past her budget", GearCrafting.decide(Set.of(), 30, all, Map.of(100, 1.0), Map.of(), 1.0, 10L, 1000L, world) == null);
+		check("a craft limit holds", GearCrafting.decide(Set.of(900), 30, all, Map.of(100, 50.0), Map.of(), 1.0, 2L, 1_000_000L, world).crafts() == 2L);
+		check("and so does the stock: she crafts the 2 the stock can supply, not the 3 asked", GearCrafting.decide(Set.of(900), 30, all, Map.of(100, 50.0), Map.of(), 1.0, 3L, 1_000_000L, world).crafts() == 2L);
+		check("D gear sells in Gludio, C and better in Giran", d.saleTown().equals("Gludio") && c.saleTown().equals("Giran") && d.shopName().equals("SatDGear") && c.shopName().equals("SatCGear"));
 	}
 
 	private static void testRaidStats()

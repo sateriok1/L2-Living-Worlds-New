@@ -304,6 +304,38 @@ public class GearCatalog implements LivingGear.Items, ColdLife.GearShop
 		return pool;
 	}
 
+	private volatile Map<Integer, Long> _vendorPrices;
+
+	/**
+	 * @param itemId any item
+	 * @return the lowest price a town vendor sells it at (the buylists whose merchants stand in the world), or 0 when none does
+	 */
+	public long vendorPrice(int itemId)
+	{
+		Map<Integer, Long> prices = _vendorPrices;
+		if (prices == null)
+		{
+			prices = new HashMap<>();
+			for (int listId : buyListIds())
+			{
+				final BuyListHolder holder = BuyListData.getInstance().getBuyList(listId);
+				if ((holder == null) || (holder.getNpcsAllowed() == null) || merchantSpots(holder.getNpcsAllowed()).isEmpty())
+				{
+					continue;
+				}
+				for (Product product : holder.getProducts())
+				{
+					if (product.getPrice() > 0)
+					{
+						prices.merge(product.getItemId(), (long) product.getPrice(), Math::min);
+					}
+				}
+			}
+			_vendorPrices = prices = Map.copyOf(prices);
+		}
+		return prices.getOrDefault(itemId, 0L);
+	}
+
 	/** The buylists that sell gear, with the spots their merchants stand at. Read once from the buylist files. */
 	private List<ShopList> shopLists()
 	{
