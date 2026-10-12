@@ -578,6 +578,18 @@ public final class ColdLife
 		}
 	}
 
+	/**
+	 * A bot with a class change to do (its quest under way, or its level due for the next one) is not asked to raid: the class
+	 * change comes first.
+	 * @param bot the bot
+	 * @param life the shared context (class changes are off when it has no quest lengths)
+	 * @return whether the bot still has its class change to finish
+	 */
+	public static boolean classChangePending(ColdBot bot, Context life)
+	{
+		return (life.classQuestMs() != null) && ((bot.getQuest() != null) || ClassPath.due(bot.getClassId(), bot.getLevel()));
+	}
+
 	private static void hunt(ColdBot bot, long now, long elapsedMs, Context context, List<DecisionLog.Event> events)
 	{
 		// Drink potions as if taking real damage while hunting. Fractional rates are rolled so the average is right.

@@ -191,7 +191,7 @@ public final class RaidDirector
 			final List<RaidPlanner.Member> candidates = new ArrayList<>();
 			for (ColdBot bot : bots)
 			{
-				if (taken.contains(bot.getId()) || (_cooldownUntil.getOrDefault(bot.getId(), 0L) > now) || bot.isHotLock() || (bot.getLevel() < (boss.level() - _config.levelsBelow())) || (bot.getLevel() > (boss.level() + _config.levelsAbove())))
+				if (taken.contains(bot.getId()) || (_cooldownUntil.getOrDefault(bot.getId(), 0L) > now) || bot.isHotLock() || ColdLife.classChangePending(bot, life) || (bot.getLevel() < (boss.level() - _config.levelsBelow())) || (bot.getLevel() > (boss.level() + _config.levelsAbove())))
 				{
 					continue;
 				}
