@@ -206,8 +206,8 @@ Raid bosses are hunted by the cold bots themselves, no bot decides it. Every `Ra
 - **The run**: the party leaves hunting (activity `raiding`, cold the whole time), gathers `RaidGatherMinutes`, walks to the boss and fights. When it ends, every member reads a Scroll of Escape to the nearest town and runs its normal errands there.
 - **The loot** (`RaidLoot`): the boss's real drop list is rolled once at the server's raid rates. Adena is split equally. The items are split as evenly in value as whole items allow, as cooperative players would: the most valuable item goes to whoever holds the least so far. Each member's items go into the town stock under the member's own id, so they sell in the shops and pay the owner. Experience and SP are shared with the party bonus.
 - **Deaths**: on a win a member dies with a chance that grows as the margin shrinks; on a wipe all die, with the usual experience loss and recovery. After a wipe the boss is left alone for `RaidRetryMinutes`.
-- **Timers**: a boss killed by a party is away for its own respawn time (the spawn table's delay and random). The timers are saved in `LivingPopulation-raids.txt` next to the snapshot. A raid does not survive a restart: its party goes back to hunting.
-- **The world boss is not touched.** A player can still fight the same boss; the cold respawn clock is separate.
+- **The world boss** (`RaidWorldSync`, on by default): a party only goes for a boss that stands alive in the world with no player within 3000 units and nobody fighting it, and a win kills the real boss with a command kill, so the server's own respawn timer starts and a player later finds the same state. If a player kills the boss or comes to it while the party is on the way, the party turns back with no loss. A raid does not survive a restart: its party goes back to hunting.
+- **Without the sync** (`RaidWorldSync = False`): the module keeps its own respawn clock (the spawn table's delay and random), saved in `LivingPopulation-raids.txt`, and the boss in the world is never touched.
 
 ## Named bots
 

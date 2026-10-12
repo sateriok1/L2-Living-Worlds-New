@@ -172,7 +172,7 @@ public class LivingPopulationModule implements GameModule
 			: null);
 		LivingPopulationManager.getInstance().setRaids(context.config().getBoolean("RaidParties", true)
 			? new RaidDirector.Config(Math.max(1, context.config().getInt("RaidMinLevel", 20)), Math.max(1, context.config().getInt("RaidMaxLevel", 40)), Math.max(0, context.config().getInt("RaidLevelsBelow", 5)), Math.max(0, context.config().getInt("RaidLevelsAbove", 10)), Math.max(1, context.config().getInt("RaidCheckMinutes", 5)) * 60_000L, Math.max(0, context.config().getInt("RaidGatherMinutes", 5)) * 60_000L, Math.max(1, context.config().getInt("RaidRetryMinutes", 60)) * 60_000L,
-				new RaidPlanner.Params(Math.max(2, context.config().getInt("RaidMinParty", 6)), Math.max(2, context.config().getInt("RaidMaxParty", 9)), Math.max(0.0, Math.min(1.0, context.config().getDouble("RaidMinWinChance", 0.9))), 70.0, Math.max(0.1, context.config().getDouble("RaidBossBurst", 1.5)), 1.8, 240.0, 1800.0))
+				new RaidPlanner.Params(Math.max(2, context.config().getInt("RaidMinParty", 6)), Math.max(2, context.config().getInt("RaidMaxParty", 9)), Math.max(0.0, Math.min(1.0, context.config().getDouble("RaidMinWinChance", 0.9))), 70.0, Math.max(0.1, context.config().getDouble("RaidBossBurst", 1.5)), 1.8, 240.0, 1800.0), context.config().getBoolean("RaidWorldSync", true))
 			: null);
 		LivingPopulationManager.getInstance().setSelfHeal(context.config().getBoolean("SelfHeal", true));
 		LivingPopulationManager.getInstance().setStartingBuffs(context.config().getBoolean("StartingBuffs", true));

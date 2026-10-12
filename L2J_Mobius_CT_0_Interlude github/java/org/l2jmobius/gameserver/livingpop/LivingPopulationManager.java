@@ -2045,6 +2045,9 @@ public class LivingPopulationManager
 		LOGGER.info("LivingPopulation: " + bosses.size() + " raid bosses of level " + config.minLevel() + " to " + config.maxLevel() + " are open to cold raid parties.");
 	}
 
+	/** How close a player may be to a raid boss before cold parties leave it alone (game units). */
+	private static final double RAID_PLAYER_RANGE = 3000.0;
+
 	/** What the raid director needs from the manager. */
 	private final class RaidHost implements RaidDirector.Host
 	{
@@ -2075,6 +2078,35 @@ public class LivingPopulationManager
 			final double dps = ((seat == 0) || (seat == 1)) ? _model.raidDps(zone, bot.getClassId(), level, stats, skills, (bot.getSoulshots() > 0L) ? 1.0 : 0.0, usesBlessed(bot)) : 0.0;
 			final RaidPlanner.Seat role = (seat == 0) ? RaidPlanner.Seat.TANK : (seat == 3) ? RaidPlanner.Seat.HEALER : (seat == 2) ? RaidPlanner.Seat.BUFFER : RaidPlanner.Seat.DAMAGE;
 			return new RaidPlanner.Member(bot.getId(), role, dps, template.getBaseHpMax(level), stats.pDef(), (seat == 3) ? _model.raidHealPerSecond(bot.getClassId(), level, stats.attack()) : 0.0, (seat == 2) ? _model.raidBuff(bot.getClassId(), level) : 1.0);
+		}
+
+		@Override
+		public boolean open(RaidDirector.BossInfo boss)
+		{
+			final org.l2jmobius.gameserver.model.actor.instance.RaidBoss npc = org.l2jmobius.gameserver.managers.RaidBossSpawnManager.getInstance().getBosses().get(boss.id());
+			if ((npc == null) || npc.isDead() || (npc.getRaidStatus() != org.l2jmobius.gameserver.model.actor.enums.npc.RaidBossStatus.ALIVE) || npc.isInCombat())
+			{
+				return false;
+			}
+			for (Player player : World.getInstance().getPlayers())
+			{
+				if ((player != null) && player.isOnline() && (player.getClient() != null) && !player.isBuddyBot() && (player.calculateDistance2D(npc) < RAID_PLAYER_RANGE))
+				{
+					return false; // a player is there
+				}
+			}
+			return true;
+		}
+
+		@Override
+		public void kill(RaidDirector.BossInfo boss)
+		{
+			final org.l2jmobius.gameserver.model.actor.instance.RaidBoss npc = org.l2jmobius.gameserver.managers.RaidBossSpawnManager.getInstance().getBosses().get(boss.id());
+			if ((npc != null) && !npc.isDead())
+			{
+				// A command kill with no attacker: no drops fall in the world (the party's loot is in the town stock) and the boss manager starts its respawn.
+				ThreadPool.execute(() -> npc.doDie(null));
+			}
 		}
 
 		@Override

@@ -38,8 +38,8 @@ import org.l2jmobius.gameserver.livingpop.ZoneCatalog.Town;
  */
 public final class RaidDirector
 {
-	/** Tuning, from the module settings. */
-	public record Config(int minLevel, int maxLevel, int levelsBelow, int levelsAbove, long checkMs, long gatherMs, long retryMs, RaidPlanner.Params planner)
+	/** Tuning, from the module settings. {@code sync}: the world's own boss is the one that is killed (see {@link Host#open}), else the director keeps a respawn clock of its own. */
+	public record Config(int minLevel, int maxLevel, int levelsBelow, int levelsAbove, long checkMs, long gatherMs, long retryMs, RaidPlanner.Params planner, boolean sync)
 	{
 	}
 
@@ -53,6 +53,12 @@ public final class RaidDirector
 	{
 		/** @return the bot as a team member against this boss, or null when it cannot go (not free, not strong enough to count) */
 		RaidPlanner.Member member(ColdBot bot, BossInfo boss, ColdLife.Context life);
+
+		/** @return whether the boss stands alive in the world with nobody fighting it or near it, so a party may go for it (with sync on) */
+		boolean open(BossInfo boss);
+
+		/** Kills the world's boss with a command kill, so its own respawn timer starts (with sync on). */
+		void kill(BossInfo boss);
 
 		/** @return what an item is worth, for splitting the loot */
 		long value(int itemId);
@@ -162,7 +168,7 @@ public final class RaidDirector
 		bosses.sort((x, y) -> Integer.compare(y.level(), x.level())); // the best loot first
 		for (BossInfo boss : bosses)
 		{
-			if ((_respawnAt.getOrDefault(boss.id(), 0L) > now) || (_retryAt.getOrDefault(boss.id(), 0L) > now) || _raids.stream().anyMatch(raid -> raid.boss().id() == boss.id()))
+			if ((!_config.sync() && (_respawnAt.getOrDefault(boss.id(), 0L) > now)) || (_retryAt.getOrDefault(boss.id(), 0L) > now) || _raids.stream().anyMatch(raid -> raid.boss().id() == boss.id()) || (_config.sync() && !host.open(boss)))
 			{
 				continue;
 			}
@@ -225,7 +231,8 @@ public final class RaidDirector
 	private void finish(Raid raid, long now, ColdLife.Context life, Host host)
 	{
 		final BossInfo boss = raid.boss();
-		final boolean won = _random.nextDouble() < raid.team().winChance();
+		final boolean gone = _config.sync() && !host.open(boss); // killed by a player meanwhile, or a player is at it: the party turns back
+		final boolean won = !gone && (_random.nextDouble() < raid.team().winChance());
 		final Town town = life.catalog().town(raid.town());
 		final List<DecisionLog.Event> shared = new ArrayList<>();
 		final int size = raid.members().size();
@@ -234,14 +241,21 @@ public final class RaidDirector
 		{
 			final List<RaidLoot.Drop> drops = RaidLoot.roll(boss.loot(), org.l2jmobius.gameserver.config.RatesConfig.RATE_RAID_DROP_CHANCE_MULTIPLIER, org.l2jmobius.gameserver.config.RatesConfig.RATE_RAID_DROP_AMOUNT_MULTIPLIER, _random);
 			loot = RaidLoot.share(drops, size, DropYield.ADENA, drop -> host.value(drop.itemId()) * drop.count(), _random.nextInt(Math.max(1, size)));
-			_respawnAt.put(boss.id(), now + Math.max(60_000L, boss.delayMs() - boss.randomMs() + (long) (_random.nextDouble() * 2.0 * boss.randomMs())));
-			_dirty = true;
+			if (_config.sync())
+			{
+				host.kill(boss); // the world's own respawn timer starts
+			}
+			else
+			{
+				_respawnAt.put(boss.id(), now + Math.max(60_000L, boss.delayMs() - boss.randomMs() + (long) (_random.nextDouble() * 2.0 * boss.randomMs())));
+				_dirty = true;
+			}
 		}
 		else
 		{
-			_retryAt.put(boss.id(), now + _config.retryMs());
+			_retryAt.put(boss.id(), now + (gone ? _config.checkMs() : _config.retryMs()));
 		}
-		final double deathChance = won ? Math.max(0.03, Math.min(0.4, 0.35 * (1.6 - raid.team().ratio()))) : 1.0;
+		final double deathChance = won ? Math.max(0.03, Math.min(0.4, 0.35 * (1.6 - raid.team().ratio()))) : (gone ? 0.0 : 1.0);
 		final double expEach = won ? (boss.exp() * Math.max(0.01, org.l2jmobius.gameserver.config.RatesConfig.RATE_XP) * PARTY_EXP[Math.min(size, PARTY_EXP.length) - 1] / size) : 0.0;
 		final double spEach = won ? (boss.sp() * Math.max(0.01, org.l2jmobius.gameserver.config.RatesConfig.RATE_SP) * PARTY_EXP[Math.min(size, PARTY_EXP.length) - 1] / size) : 0.0;
 		for (int i = 0; i < size; i++)
@@ -275,7 +289,7 @@ public final class RaidDirector
 				}
 				else
 				{
-					events.add(new DecisionLog.Event(null, "The party wiped on " + boss.name()));
+					events.add(new DecisionLog.Event(null, gone ? ("Found " + boss.name() + " already gone or busy. The party turns back") : ("The party wiped on " + boss.name())));
 				}
 				if ((town != null) && (_random.nextDouble() < deathChance))
 				{
