@@ -228,6 +228,25 @@ public final class ClassPath
 				}
 			}
 		}
+		// SonOfZion: a Mystic who becomes a Cleric and a Bishop, or an Orc Fighter who becomes a Raider (then Destroyer and Titan).
+		if (ColdSeedPlan.ZION.equalsIgnoreCase(name))
+		{
+			switch (classId)
+			{
+				case 10:
+				{
+					return 15;
+				}
+				case 15:
+				{
+					return 16;
+				}
+				case 44:
+				{
+					return 45;
+				}
+			}
+		}
 		return next(classId, botId);
 	}
 

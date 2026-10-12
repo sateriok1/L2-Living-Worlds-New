@@ -89,11 +89,22 @@ public final class ColdSeedPlan
 
 	/** The owner's name: a human Fighter who always becomes a Duelist, born with the first wave. */
 	public static final String OWNER = "Sateriok";
+	/** A friend's name: a male bot, half the time a human Mystic who becomes a Bishop and half an Orc Fighter who becomes a Titan. */
+	public static final String ZION = "SonOfZion";
 	/** A friend's name: a bot of a random race and class, born with the first wave. */
 	public static final String FRIEND = "Teras";
 
 	private ColdSeedPlan()
 	{
+	}
+
+	/**
+	 * @param random the source
+	 * @return SonOfZion, a human Mystic or an Orc Fighter by a coin toss
+	 */
+	public static SeedSpec zion(Random random)
+	{
+		return random.nextBoolean() ? new SeedSpec("Human", 10, ZION) : new SeedSpec("Orc", 44, ZION);
 	}
 
 	/**

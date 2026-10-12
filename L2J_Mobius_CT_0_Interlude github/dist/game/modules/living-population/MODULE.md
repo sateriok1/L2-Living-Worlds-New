@@ -196,4 +196,4 @@ An Artisan or Warsmith cold bot supplies the D and C soulshots and blessed spiri
 
 ## Named bots
 
-The first birth wave also adds three named bots, each only if no bot or character already has the name: Sateya (the Merchant, above), Sateriok (a male human Fighter who always becomes a Warrior, Gladiator and Duelist, with no other special behavior) and Teras (a random race and starting class). If a character already uses one of the names, that bot is not born and a warning is logged.
+The first birth wave also adds four named bots, each only if no bot or character already has the name: Sateya (the Merchant, above), Sateriok (a male human Fighter who always becomes a Warrior, Gladiator and Duelist, with no other special behavior), SonOfZion (a man: half the time a human Mystic who becomes a Cleric and a Bishop, half an Orc Fighter who becomes a Titan) and Teras (a random race and starting class). If a character already uses one of the names, that bot is not born and a warning is logged.

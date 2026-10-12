@@ -763,7 +763,8 @@ public class LivingPopulationManager
 		final boolean needMerchant = (_merchant != null) && (wanted > 0) && _bots.stream().noneMatch(present -> ShotCrafting.MERCHANT.equalsIgnoreCase(present.getName()));
 		final boolean needOwner = (wanted > 0) && _bots.stream().noneMatch(present -> ColdSeedPlan.OWNER.equalsIgnoreCase(present.getName()));
 		final boolean needFriend = (wanted > 0) && _bots.stream().noneMatch(present -> ColdSeedPlan.FRIEND.equalsIgnoreCase(present.getName()));
-		if ((missing <= 0) && !needMerchant && !needOwner && !needFriend)
+		final boolean needZion = (wanted > 0) && _bots.stream().noneMatch(present -> ColdSeedPlan.ZION.equalsIgnoreCase(present.getName()));
+		if ((missing <= 0) && !needMerchant && !needOwner && !needFriend && !needZion)
 		{
 			return;
 		}
@@ -777,7 +778,7 @@ public class LivingPopulationManager
 			classes.merge(startingClassOf(present.getClassId()), 1, Integer::sum);
 		}
 		final List<ColdSeedPlan.SeedSpec> specs = new ArrayList<>(ColdSeedPlan.plan(needed, classes, _random, name -> nameTaken(name, existing)));
-		// Named bots in the first wave: Sateya the Merchant (a dwarf), Sateriok (a human Fighter who becomes a Duelist) and Teras (a random race and class).
+		// Named bots in the first wave: Sateya the Merchant (a dwarf), Sateriok (a human Fighter who becomes a Duelist), SonOfZion (a man, a Mystic who becomes a Bishop or an Orc Fighter who becomes a Titan) and Teras (a random race and class).
 		final List<ColdSeedPlan.SeedSpec> named = new ArrayList<>();
 		if (needMerchant)
 		{
@@ -786,6 +787,10 @@ public class LivingPopulationManager
 		if (needOwner)
 		{
 			named.add(new ColdSeedPlan.SeedSpec("Human", 0, ColdSeedPlan.OWNER));
+		}
+		if (needZion)
+		{
+			named.add(ColdSeedPlan.zion(_random));
 		}
 		if (needFriend)
 		{

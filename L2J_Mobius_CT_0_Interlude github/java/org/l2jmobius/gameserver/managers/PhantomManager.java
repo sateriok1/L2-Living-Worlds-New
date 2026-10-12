@@ -2686,7 +2686,7 @@ public class PhantomManager implements IXmlReader
 			}
 			else
 			{
-				final boolean female = org.l2jmobius.gameserver.livingpop.ShotCrafting.MERCHANT.equalsIgnoreCase(name) || (!org.l2jmobius.gameserver.livingpop.ColdSeedPlan.OWNER.equalsIgnoreCase(name) && Rnd.nextBoolean()); // the Merchant, Sateya, is a woman and Sateriok a man
+				final boolean female = org.l2jmobius.gameserver.livingpop.ShotCrafting.MERCHANT.equalsIgnoreCase(name) || (!org.l2jmobius.gameserver.livingpop.ColdSeedPlan.OWNER.equalsIgnoreCase(name) && !org.l2jmobius.gameserver.livingpop.ColdSeedPlan.ZION.equalsIgnoreCase(name) && Rnd.nextBoolean()); // the Merchant, Sateya, is a woman; Sateriok and SonOfZion are men
 				final PlayerAppearance appearance = new PlayerAppearance((byte) Rnd.get(0, 2), (byte) Rnd.get(0, 3), (byte) Rnd.get(0, 2), female);
 				// isBuddyBot = true: a living-population character is never counted as a human observer, mirroring phantoms.
 				phantom = Player.create(template, ACCOUNT_NAME_LIVINGPOP, name, appearance, true);
