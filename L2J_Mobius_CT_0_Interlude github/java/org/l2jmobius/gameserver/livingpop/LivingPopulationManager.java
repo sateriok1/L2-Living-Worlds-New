@@ -1989,7 +1989,9 @@ public class LivingPopulationManager
 				// A kill pays from the zone monsters' real drop lists when the catalog has them: adena now, loot sold in town.
 				final DropYield.Yield yield = _travelConfig.dropIncome() ? zoneYield(bot.getZone(), progress.level(), spoils) : null;
 				// A mystic fires spiritshots, at its own rate per kill. A bot's own kill rate (zone combat) replaces the flat one.
-				final ColdEconomy.Params shotParams = economyParams.withSoulshotsPerKill(shotsPerKillOf(combat, bot, progress.level(), economyParams));
+				final double shotsEach = shotsPerKillOf(combat, bot, progress.level(), economyParams);
+				bot.setShotsPerKill(shotsEach); // the shot stock target follows it
+				final ColdEconomy.Params shotParams = economyParams.withSoulshotsPerKill(shotsEach);
 				final ColdEconomy.Params botEconomy = combat.enabled() ? shotParams.withKillsPerMinute(botKillsPerMinute) : shotParams;
 				final ColdEconomy.State after = ColdEconomy.accrue(before, progress.level(), huntedMs, botEconomy, (yield == null) ? -1.0 : (yield.adena() * lootScale), events);
 				recordShotDemand(bot, combat, before, after, botEconomy, huntedMs, now);

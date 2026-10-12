@@ -1900,6 +1900,8 @@ public class LivingTravelTest
 		final long flatTarget = SupplyPlanner.soulshotTarget(true, flatSupply);
 		final long fastTarget = SupplyPlanner.soulshotTarget(true, flatSupply.withKillsPerMinute(flatSupply.killsPerMinute() * 2.0));
 		check("a bot's own kill rate sets its shot stock: a fast killer carries more, none given keeps the flat rate", (fastTarget > flatTarget) && (SupplyPlanner.soulshotTarget(true, flatSupply.withKillsPerMinute(0.0)) == flatTarget));
+		brokeRaider.setShotsPerKill(-2.0);
+		check("a shots-per-kill figure is never negative", brokeRaider.getShotsPerKill() == 0.0);
 		brokeRaider.setKillRate(-5.0);
 		check("a kill rate is never negative", brokeRaider.getKillRate() == 0.0);
 		final ColdLife.Needs owed = ColdLife.needsOf(due, null, classes, 0L);

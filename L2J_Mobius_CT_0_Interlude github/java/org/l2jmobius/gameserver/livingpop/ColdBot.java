@@ -82,6 +82,7 @@ public class ColdBot
 	private volatile double _partyDeathFactor; // zone model: the death factor while hunting in the virtual party (0 = hunting alone); not saved
 	private volatile double _partyDeaths = -1.0; // zone model: deaths an hour in the virtual party from the HP model (-1 = none); not saved
 	private volatile double _killRate; // zone model: kills a minute last given (0 = none yet); not saved
+	private volatile double _shotsPerKill; // zone model: shots a kill takes it with its real skills and shot kind (0 = none yet); not saved
 	private volatile double _kills;
 	private volatile long _adenaEarned;
 	private volatile long _shoppedAt; // when it last finished its errands in town (0 = never), kept with the counters
@@ -111,6 +112,17 @@ public class ColdBot
 	public double getKillRate()
 	{
 		return _killRate;
+	}
+
+	/** @return the shots a kill last took this bot, with its learned skills and the shot kind it fires, or 0 before it has one */
+	public double getShotsPerKill()
+	{
+		return _shotsPerKill;
+	}
+
+	public void setShotsPerKill(double perKill)
+	{
+		_shotsPerKill = Math.max(0.0, perKill);
 	}
 
 	public void setKillRate(double killsPerMinute)
