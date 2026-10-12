@@ -38,6 +38,7 @@ import org.l2jmobius.gameserver.livingpop.RaidLoot;
 import org.l2jmobius.gameserver.livingpop.RaidPlanner;
 import org.l2jmobius.gameserver.livingpop.GearCrafting;
 import org.l2jmobius.gameserver.livingpop.GearOrders;
+import org.l2jmobius.gameserver.livingpop.PlayerRequests;
 import org.l2jmobius.gameserver.livingpop.RaidStats;
 import org.l2jmobius.gameserver.livingpop.ShotCrafting;
 import org.l2jmobius.gameserver.livingpop.ShotDemand;
@@ -99,6 +100,8 @@ public class LivingTravelTest
 		testRaidStats();
 		testGearCrafting();
 		testGearOrders();
+		testPlayerRequests();
+		testGearStreak();
 		testLootSale();
 		testColdRisk();
 		testColdDeathAndRest();
@@ -976,6 +979,44 @@ public class LivingTravelTest
 		check("nor a piece that costs more than its reference price", !GearCrafting.craftable(d, 30, Set.of(), market(stock, Map.of(1, 100L, 2, 500L, 100, 800L, 900, 1000L), Map.of())));
 		check("nor a piece a vendor shop already sells for less", !GearCrafting.craftable(d, 30, Set.of(), market(stock, reference, Map.of(100, 900L))) && GearCrafting.craftable(d, 30, Set.of(), market(stock, reference, Map.of(100, 4000L))));
 		check("D gear sells in Gludio, C and better in Giran", d.saleTown().equals("Gludio") && c.saleTown().equals("Giran"));
+	}
+
+	private static void testPlayerRequests()
+	{
+		final PlayerRequests book = new PlayerRequests();
+		final long t0 = 1_000_000L;
+		book.open(7, "Ann", 40, 100, Map.of(1, 5L, 2, 1L), t0);
+		book.open(8, "Bob", 50, 101, Map.of(1, 2L), t0);
+		check("requests set stock aside", (book.reserved(-1L).get(1) == 7L) && (book.reserved(7L).get(1) == 2L) && book.reserved(PlayerRequests.ALL_FREE).isEmpty());
+		check("a request is not asked before 10 minutes", book.askable(t0 + PlayerRequests.ASK_AFTER_MS - 1).isEmpty() && (book.askable(t0 + PlayerRequests.ASK_AFTER_MS).size() == 2));
+		check("one ask, then it waits", book.ask(7, t0 + PlayerRequests.ASK_AFTER_MS) && !book.ask(7, t0 + PlayerRequests.ASK_AFTER_MS + 1) && book.asked(7) && (book.askable(t0 + PlayerRequests.ASK_AFTER_MS).size() == 1));
+		check("a yes confirms it", (book.confirm(7, t0 + PlayerRequests.ASK_AFTER_MS + 1000L) != null) && !book.asked(7) && (book.confirm(8, t0) == null));
+		book.ask(8, t0 + PlayerRequests.ASK_AFTER_MS);
+		final long late = t0 + PlayerRequests.ASK_AFTER_MS + PlayerRequests.ANSWER_MS + 1;
+		check("silence is a no and frees the stock", (book.expire(late).size() == 1) && (book.of(8) == null) && (book.of(7) != null) && (book.reserved(-1L).get(1) == 5L));
+		check("a confirmed request that is never started lapses", book.expire(t0 + PlayerRequests.ASK_AFTER_MS + 1000L + PlayerRequests.CONFIRMED_LIFE_MS + 1).size() == 1);
+		check("one request an hour, even after it lapsed", (book.cooldownLeft(7, t0 + 1000L) > 0L) && (book.cooldownLeft(7, t0 + PlayerRequests.COOLDOWN_MS) == 0L) && (book.cooldownLeft(99, t0) == 0L));
+		book.spend(9, 5000L, Map.of(3, 2L));
+		final PlayerRequests copy = new PlayerRequests();
+		copy.open(5, "Cy", 20, 102, Map.of(4, 1L), t0);
+		copy.spend(9, 5000L, Map.of(3, 2L));
+		final PlayerRequests loaded = new PlayerRequests();
+		loaded.decode(copy.encode());
+		check("requests, what she laid out and the cooldown survive a restart", (loaded.of(5).mats().get(4) == 1L) && (loaded.spent(9).outlay() == 5000L) && (loaded.spent(9).mats().get(3) == 2L) && (loaded.cooldownLeft(5, t0 + 1L) > 0L));
+		check("settling returns what she kept", (loaded.settle(9) != null) && (loaded.spent(9) == null));
+	}
+
+	private static void testGearStreak()
+	{
+		final GearCrafting.Params params = new GearCrafting.Params(0L, 0.5, 45.0, 120_000L, 1_200_000L, 0.6, 0.8, 21_600_000L, 86_400_000L);
+		boolean inRange = true;
+		for (int i = 0; i <= 100; i++)
+		{
+			final int streak = params.streakFor(i / 100.0);
+			inRange &= (streak >= 4) && (streak <= 10);
+		}
+		check("a streak is 4 to 10 orders in a row", inRange && (params.streakFor(0.0) == 4) && (params.streakFor(1.0) == 10));
+		check("she hunts a guaranteed while after it", params.huntMs() == GearCrafting.HUNT_MS);
 	}
 
 	private static void testGearOrders()

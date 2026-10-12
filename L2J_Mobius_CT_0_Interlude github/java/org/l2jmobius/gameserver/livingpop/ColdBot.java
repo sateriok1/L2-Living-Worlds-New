@@ -85,6 +85,9 @@ public class ColdBot
 	private volatile long _adenaEarned;
 	private volatile long _shoppedAt; // when it last finished its errands in town (0 = never), kept with the counters
 	private volatile int _shotItem; // the shot item its soulshot stock is of (0 = not noted yet), kept with the counters
+	private volatile int _gearStreak; // orders done in the current streak
+	private volatile int _gearCap; // orders allowed in the current streak (rolled when it starts, 0 until then)
+	private volatile long _gearRestUntil; // a Merchant: she takes no gear order before this time (the rest after a craft keeps her hunting)
 	private volatile Set<Integer> _gearRecipes = Set.of(); // a Merchant: the recipe items of the gear she has learned to craft
 	private volatile int _recipes; // a Merchant: bits of the shot recipes it has learned (ShotCrafting.bit), kept with the counters
 	private volatile int _carryItem; // a Merchant: the shots it crafted and has yet to put on sale
@@ -529,6 +532,32 @@ public class ColdBot
 	}
 
 	/** @return the recipe items of the gear this bot has learned to craft */
+	public int getGearStreak()
+	{
+		return _gearStreak;
+	}
+
+	public int getGearCap()
+	{
+		return _gearCap;
+	}
+
+	public void setGearStreak(int streak, int cap)
+	{
+		_gearStreak = Math.max(0, streak);
+		_gearCap = Math.max(0, cap);
+	}
+
+	public long getGearRestUntil()
+	{
+		return _gearRestUntil;
+	}
+
+	public void setGearRestUntil(long gearRestUntil)
+	{
+		_gearRestUntil = Math.max(0L, gearRestUntil);
+	}
+
 	public Set<Integer> getGearRecipes()
 	{
 		return _gearRecipes;
@@ -590,11 +619,11 @@ public class ColdBot
 	public String getStatsJson()
 	{
 		final String decisions = _decisions.toJson();
-		if ((_kills <= 0.0) && (_adenaEarned <= 0L) && (_shoppedAt <= 0L) && (_recipes == 0) && _gearRecipes.isEmpty() && (_carryCount <= 0L) && (_shotItem == 0))
+		if ((_kills <= 0.0) && (_adenaEarned <= 0L) && (_shoppedAt <= 0L) && (_recipes == 0) && _gearRecipes.isEmpty() && (_gearRestUntil <= 0L) && (_gearStreak <= 0) && (_carryCount <= 0L) && (_shotItem == 0))
 		{
 			return decisions;
 		}
-		return decisions.substring(0, decisions.length() - 1) + ",\"counters\":{\"kills\":" + String.format(Locale.US, "%.1f", _kills) + ",\"adena\":" + _adenaEarned + ((_shoppedAt > 0L) ? (",\"shoppedAt\":" + _shoppedAt) : "") + ((_recipes != 0) ? (",\"recipes\":" + _recipes) : "") + (_gearRecipes.isEmpty() ? "" : (",\"gearRecipes\":" + new java.util.TreeSet<>(_gearRecipes))) + ((_shotItem != 0) ? (",\"shotItem\":" + _shotItem) : "") + ((_carryCount > 0L) ? (",\"carryItem\":" + _carryItem + ",\"carryCount\":" + _carryCount + ",\"carryTown\":\"" + _carryTown + "\"") : "") + "}}";
+		return decisions.substring(0, decisions.length() - 1) + ",\"counters\":{\"kills\":" + String.format(Locale.US, "%.1f", _kills) + ",\"adena\":" + _adenaEarned + ((_shoppedAt > 0L) ? (",\"shoppedAt\":" + _shoppedAt) : "") + ((_recipes != 0) ? (",\"recipes\":" + _recipes) : "") + (_gearRecipes.isEmpty() ? "" : (",\"gearRecipes\":" + new java.util.TreeSet<>(_gearRecipes))) + ((_gearRestUntil > 0L) ? (",\"gearRest\":" + _gearRestUntil) : "") + ((_gearStreak > 0) ? (",\"gearStreak\":" + _gearStreak + ",\"gearCap\":" + _gearCap) : "") + ((_shotItem != 0) ? (",\"shotItem\":" + _shotItem) : "") + ((_carryCount > 0L) ? (",\"carryItem\":" + _carryItem + ",\"carryCount\":" + _carryCount + ",\"carryTown\":\"" + _carryTown + "\"") : "") + "}}";
 	}
 
 	/**
@@ -609,6 +638,9 @@ public class ColdBot
 		_shoppedAt = 0L;
 		_recipes = 0;
 		_gearRecipes = Set.of();
+		_gearRestUntil = 0L;
+		_gearStreak = 0;
+		_gearCap = 0;
 		_shotItem = 0;
 		setCarry(0, 0L, null);
 		if ((statsJson == null) || statsJson.isBlank())
@@ -639,6 +671,14 @@ public class ColdBot
 				if (counters.get("recipes") instanceof Number recipes)
 				{
 					_recipes = Math.max(0, recipes.intValue());
+				}
+				if ((counters.get("gearStreak") instanceof Number streak) && (counters.get("gearCap") instanceof Number cap))
+				{
+					setGearStreak(streak.intValue(), cap.intValue());
+				}
+				if (counters.get("gearRest") instanceof Number rest)
+				{
+					_gearRestUntil = Math.max(0L, rest.longValue());
 				}
 				if (counters.get("gearRecipes") instanceof java.util.List<?> list)
 				{

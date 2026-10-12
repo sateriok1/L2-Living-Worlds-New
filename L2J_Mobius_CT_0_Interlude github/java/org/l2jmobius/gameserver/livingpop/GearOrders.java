@@ -178,6 +178,21 @@ public final class GearOrders
 		return old;
 	}
 
+	/** @return the orders in a state, oldest first */
+	public synchronized List<Order> orders(State state)
+	{
+		final List<Order> list = new ArrayList<>();
+		for (Order order : _orders.values())
+		{
+			if (order.state() == state)
+			{
+				list.add(order);
+			}
+		}
+		list.sort(Comparator.comparingLong(Order::at));
+		return list;
+	}
+
 	/** @return the order Sateya is crafting now, or null (she crafts one at a time) */
 	public synchronized Order crafting()
 	{

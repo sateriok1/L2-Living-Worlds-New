@@ -67,9 +67,27 @@ public final class GearCrafting
 	 * @param readyMs how long a finished piece waits for its hunter
 	 * @param wishMs how long a wish lives without being refreshed
 	 */
-	public record Params(long workingCapital, double upgradeShare, double craftBaseMinutes, long shopLegMs, long meetMs, double shareMin, double shareMax, long readyMs, long wishMs)
+	public record Params(long workingCapital, double upgradeShare, double craftBaseMinutes, long shopLegMs, long meetMs, double shareMin, double shareMax, long readyMs, long wishMs, int streakMin, int streakMax, long huntMs)
 	{
+		/** Without a streak she does {@link #STREAK_MIN} to {@link #STREAK_MAX} orders in a row, then hunts {@link #HUNT_MS}. */
+		public Params(long workingCapital, double upgradeShare, double craftBaseMinutes, long shopLegMs, long meetMs, double shareMin, double shareMax, long readyMs, long wishMs)
+		{
+			this(workingCapital, upgradeShare, craftBaseMinutes, shopLegMs, meetMs, shareMin, shareMax, readyMs, wishMs, STREAK_MIN, STREAK_MAX, HUNT_MS);
+		}
+
+		/** @return how many orders she may do in a row this time, rolled from the range (the first streak of the range when the roll is 0, the last at 1) */
+		public int streakFor(double roll)
+		{
+			final int lo = Math.max(1, Math.min(streakMin, streakMax));
+			final int hi = Math.max(lo, Math.max(streakMin, streakMax));
+			return lo + (int) Math.floor(Math.max(0.0, Math.min(0.999999, roll)) * (hi - lo + 1));
+		}
 	}
+
+	/** The safety control: she does this many orders (rolled between the two) in a row, then hunts for a guaranteed time before the next order. */
+	public static final int STREAK_MIN = 4;
+	public static final int STREAK_MAX = 10;
+	public static final long HUNT_MS = 2 * 3_600_000L;
 
 	/**
 	 * A piece she can craft.

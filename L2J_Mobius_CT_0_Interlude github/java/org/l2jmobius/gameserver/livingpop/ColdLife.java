@@ -314,6 +314,12 @@ public final class ColdLife
 		{
 		}
 
+		/** @return the world as {@link #gearMarket(double)} but for one order: the stock set aside for a player's request counts for that player's own order only */
+		default GearCrafting.Market gearMarket(double share, long forBot)
+		{
+			return gearMarket(share);
+		}
+
 		/** @return the hunter (cold row) with this id, or null */
 		default ColdBot gearBot(long botId)
 		{
@@ -1208,7 +1214,15 @@ public final class ColdLife
 			resumeGearCraft(bot, active, now, context, events);
 			return true;
 		}
+		if (now < bot.getGearRestUntil())
+		{
+			return false; // the safety control: she is resting from her last craft and hunts until it is over
+		}
 		final Random random = context.random();
+		if (bot.getGearCap() <= 0)
+		{
+			bot.setGearStreak(0, params.streakFor(random.nextDouble())); // a new streak: this many orders in a row
+		}
 		// Her own leveling comes first: what the next lessons cost (books) stays out of what she lays out on a craft.
 		final SkillPlanner.Lesson lesson = previewLesson(bot, trainingBudget(bot, purse(bot), context), context);
 		final long levelFund = (lesson == null) ? 0L : Math.max(0L, lesson.adena());
@@ -1217,11 +1231,12 @@ public final class ColdLife
 			// The hunter's means are read again now: with too little it is skipped and she moves on to the next in line.
 			final ColdBot wisher = shop.gearBot(wish.botId());
 			final long funds = shop.gearFunds(wish.botId());
-			if ((wisher == null) || (funds < 0L))
+			if (funds < 0L)
 			{
 				continue;
 			}
-			final long budget = upgradeBudget(wisher, funds, context);
+			// A player asking for a piece pays from its purse; a hunter from what it may spend on gear.
+			final long budget = (wisher == null) ? funds : upgradeBudget(wisher, funds, context);
 			if (budget <= 0L)
 			{
 				continue;
@@ -1236,7 +1251,7 @@ public final class ColdLife
 				}
 			}
 			final double share = params.shareMin() + (random.nextDouble() * Math.max(0.0, params.shareMax() - params.shareMin()));
-			final GearCrafting.Market market = (recipe == null) ? null : shop.gearMarket(share);
+			final GearCrafting.Market market = (recipe == null) ? null : shop.gearMarket(share, wish.botId());
 			if (market == null)
 			{
 				continue;
@@ -1328,6 +1343,17 @@ public final class ColdLife
 		}
 		final Town dest = context.catalog().town(saleTown);
 		shop.gearReady(order.botId(), saleTown, now);
+		// The safety control: after her streak of orders (4 to 10, rolled when it started) she hunts for a guaranteed time before the next.
+		final int streak = bot.getGearStreak() + 1;
+		if (streak >= Math.max(1, bot.getGearCap()))
+		{
+			bot.setGearStreak(0, 0);
+			bot.setGearRestUntil(now + shop.gearParams().huntMs() + shop.gearParams().meetMs());
+		}
+		else
+		{
+			bot.setGearStreak(streak, bot.getGearCap());
+		}
 		long wait = shop.gearParams().meetMs();
 		if ((dest != null) && !dest.name().equals(bot.getTown()))
 		{

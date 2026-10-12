@@ -75,6 +75,7 @@ import org.l2jmobius.gameserver.model.actor.holders.npc.DropHolder;
 import org.l2jmobius.gameserver.model.actor.templates.NpcTemplate;
 import org.l2jmobius.gameserver.model.actor.templates.PlayerTemplate;
 import org.l2jmobius.gameserver.model.item.ItemTemplate;
+import org.l2jmobius.gameserver.model.item.enums.ItemProcessType;
 import org.l2jmobius.gameserver.model.item.Weapon;
 import org.l2jmobius.gameserver.model.item.enums.BodyPart;
 import org.l2jmobius.gameserver.model.item.holders.ItemHolder;
@@ -292,6 +293,8 @@ public class LivingPopulationManager
 	}
 
 	private final Map<String, Npc> _shopkeepers = new HashMap<>(); // shop name to its phantom, while it stands in the world
+	private final PlayerRequests _requests = new PlayerRequests(); // what real players asked Sateya for, and what she laid out on their orders (saved)
+	private final Map<Long, long[]> _blocked = new ConcurrentHashMap<>(); // hunters held up by stock a player's request set aside: bot id to {product, time}
 	private final GearOrders _gearOrders = new GearOrders(); // the book of gear orders the hunters and the Merchant share (saved)
 	private volatile List<GearCrafting.Recipe> _gearRecipeList;
 
@@ -533,6 +536,12 @@ public class LivingPopulationManager
 		}
 
 		@Override
+		public GearCrafting.Market gearMarket(double share, long forBot)
+		{
+			return (gearParams() == null) ? null : snapshotMarket(share, forBot);
+		}
+
+		@Override
 		public List<GearCrafting.Recipe> gearRecipes()
 		{
 			return (gearParams() == null) ? List.of() : gearRecipeList();
@@ -547,10 +556,20 @@ public class LivingPopulationManager
 			if ((recipe != null) && GearCrafting.craftable(recipe, merchant.getLevel(), merchant.getGearRecipes(), snapshotMarket(GearCrafting.STOCK_SHARE)))
 			{
 				_gearOrders.wish(botId, botLevel, productId, budget, now);
+				_blocked.remove(botId);
 			}
 			else
 			{
 				_gearOrders.clearWish(botId);
+				// Held up only by stock a player's request has set aside? Remembered, so the player can be asked.
+				if ((recipe != null) && GearCrafting.craftable(recipe, merchant.getLevel(), merchant.getGearRecipes(), snapshotMarket(GearCrafting.STOCK_SHARE, PlayerRequests.ALL_FREE)))
+				{
+					_blocked.put(botId, new long[]
+					{
+						productId,
+						now
+					});
+				}
 			}
 		}
 
@@ -576,7 +595,12 @@ public class LivingPopulationManager
 				return hot;
 			}
 			final ColdBot bot = gearBot(botId);
-			return (bot == null) ? -1L : bot.getAdena();
+			if (bot != null)
+			{
+				return bot.getAdena();
+			}
+			final Player player = World.getInstance().getPlayer((int) botId); // a real player asking for a piece
+			return ((player == null) || (_requests.of(botId) == null)) ? -1L : player.getAdena();
 		}
 
 		@Override
@@ -665,6 +689,12 @@ public class LivingPopulationManager
 				towns.add(GearCrafting.C_TOWN); // everything came from the vendors: one stop at the shops in Giran
 			}
 			_gearOrders.accept(wish.botId(), quote.price(), advance, craftMs, towns.get(towns.size() - 1), now);
+			if (_requests.remove(wish.botId()) != null)
+			{
+				// A player's order: the stock set aside is used, and what she laid out is kept on record until the player has paid.
+				_requests.spend(wish.botId(), quote.outlay(), toLongs(recipe.ingredients()));
+				tell(wish.botId(), "I have the materials and I'm starting on it now: it takes about " + Math.max(1L, craftMs / 60_000L) + " minutes. I'll whisper you when it's ready.");
+			}
 			return towns;
 		}
 
@@ -678,6 +708,11 @@ public class LivingPopulationManager
 				final GearCrafting.Recipe recipe = gearRecipeOf(order.productId());
 				// The piece is parked in the town's stock under her name; extra pieces of a craft stay for later orders.
 				_townStock.add(town, merchant.getId(), order.productId(), (recipe == null) ? 1L : recipe.perCraft());
+				if (_requests.spent(botId) != null)
+				{
+					final ItemTemplate item = ItemData.getInstance().getTemplate(order.productId());
+					tell(botId, "Your " + ((item == null) ? "piece" : item.getName()) + " is ready in " + town + ". Come to me there within " + (PlayerRequests.HOLD_MS / 60_000L) + " minutes, whisper me 'trade', and bring " + order.due() + " adena.");
+				}
 			}
 		}
 
@@ -696,32 +731,7 @@ public class LivingPopulationManager
 		@Override
 		public boolean gearTrade(long botId, String town, int productId, long paid)
 		{
-			final GearOrders.Order order = _gearOrders.of(botId);
-			if ((order == null) || (order.state() != GearOrders.State.READY) || (order.productId() != productId) || !town.equals(order.town()))
-			{
-				return false;
-			}
-			// One transfer: the piece leaves the stock, she is paid what it owed, the order is closed. If the piece is not there, nothing changes.
-			final List<TownStock.Listing> taken = _townStock.take(town, productId, 1);
-			if (taken == null)
-			{
-				return false;
-			}
-			final List<Long> shares = TownStock.shares(taken, Math.max(0L, paid));
-			for (int i = 0; i < taken.size(); i++)
-			{
-				payOwner(taken.get(i).owner(), shares.get(i));
-			}
-			_gearOrders.remove(botId);
-			// The pieces of the craft beyond the ones other orders hold are excess once this trade is done: Sateya sells them to a vendor at half their reference price.
-			final long spare = _townStock.count(town, productId) - _gearOrders.ready(productId);
-			final ColdBot merchant = merchantBot();
-			if ((spare > 0L) && (merchant != null) && (_townStock.take(town, productId, spare) != null))
-			{
-				final ItemTemplate item = ItemData.getInstance().getTemplate(productId);
-				payOwner(merchant.getId(), spare * ((item == null) ? 0L : Math.max(0L, item.getReferencePrice() / 2L)));
-			}
-			return true;
+			return completeTrade(botId, town, productId, paid);
 		}
 
 		@Override
@@ -729,6 +739,37 @@ public class LivingPopulationManager
 		{
 			return _config.isleMinCrafts();
 		}
+	}
+
+	/** The one transfer of a trade with Sateya: the piece leaves the stock, she is paid what it owed, the order closes, and what the craft left over is sold. */
+	private boolean completeTrade(long botId, String town, int productId, long paid)
+	{
+		final GearOrders.Order order = _gearOrders.of(botId);
+		if ((order == null) || (order.state() != GearOrders.State.READY) || (order.productId() != productId) || !town.equals(order.town()))
+		{
+			return false;
+		}
+		final List<TownStock.Listing> taken = _townStock.take(town, productId, 1);
+		if (taken == null)
+		{
+			return false;
+		}
+		final List<Long> shares = TownStock.shares(taken, Math.max(0L, paid));
+		for (int i = 0; i < taken.size(); i++)
+		{
+			payOwner(taken.get(i).owner(), shares.get(i));
+		}
+		_gearOrders.remove(botId);
+		_requests.settle(botId);
+		// The pieces of the craft beyond the ones other orders hold are excess once this trade is done: Sateya sells them to a vendor at half their reference price.
+		final long spare = _townStock.count(town, productId) - _gearOrders.ready(productId);
+		final ColdBot merchant = merchantBot();
+		if ((spare > 0L) && (merchant != null) && (_townStock.take(town, productId, spare) != null))
+		{
+			final ItemTemplate item = ItemData.getInstance().getTemplate(productId);
+			payOwner(merchant.getId(), spare * ((item == null) ? 0L : Math.max(0L, item.getReferencePrice() / 2L)));
+		}
+		return true;
 	}
 
 	/** @return the Merchant, Sateya, or null while she is not in the population */
@@ -747,11 +788,21 @@ public class LivingPopulationManager
 	/** @return what the towns hold and charge now, read once so a decision sees one consistent world */
 	private GearCrafting.Market snapshotMarket(double share)
 	{
+		return snapshotMarket(share, -1L);
+	}
+
+	/**
+	 * @param forPlayer a player whose request's set-aside stock counts as free for this look (its own order), {@link PlayerRequests#ALL_FREE} to count all as free, or -1 to take every request's stock out
+	 * @return what the towns hold and charge now
+	 */
+	private GearCrafting.Market snapshotMarket(double share, long forPlayer)
+	{
 		final Map<Integer, Long> held = new HashMap<>();
 		for (Map<Integer, Long> town : _townStock.totals().values())
 		{
 			town.forEach((item, count) -> held.merge(item, count, Long::sum));
 		}
+		_requests.reserved(forPlayer).forEach((item, count) -> held.computeIfPresent(item, (k, v) -> Math.max(0L, v - count))); // set aside for a player's request
 		final GearCatalog gear = _gear;
 		return new GearCrafting.Market()
 		{
@@ -855,6 +906,19 @@ public class LivingPopulationManager
 	}
 
 	/** @return the items the town clearing leaves alone: the Merchant's shots and parked gear, and every crafting reagent and recipe (they are never vendored, for now) */
+	private static Map<Integer, Long> toLongs(Map<Integer, Integer> counts)
+	{
+		final Map<Integer, Long> longs = new HashMap<>();
+		counts.forEach((item, count) -> longs.put(item, (long) count));
+		return longs;
+	}
+
+	/** Sateya whispers a real player (nothing when it is a bot or offline). */
+	private void tell(long playerId, String text)
+	{
+		whisper(World.getInstance().getPlayer((int) playerId), ShotCrafting.MERCHANT, text);
+	}
+
 	private Set<Integer> keepItems()
 	{
 		final Set<Integer> items = new HashSet<>(shopkeeperItems());
@@ -892,12 +956,17 @@ public class LivingPopulationManager
 				}
 			}
 		}
+		final Player player = World.getInstance().getPlayer((int) id); // a real player
+		if ((player != null) && (adena <= Integer.MAX_VALUE) && (player.getAdena() >= adena))
+		{
+			return player.reduceAdena(ItemProcessType.REWARD, (int) adena, null, true);
+		}
 		return false;
 	}
 
 	/**
 	 * Drops the orders that went stale: a wish nobody refreshed, a craft whose trip was lost, and a finished piece nobody came
-	 * for (the hunter gets its advance back; the piece goes to a vendor at half its reference price, paid to the Merchant).
+	 * for. A player has an hour from the moment its piece is ready.
 	 */
 	private void expireGearOrders()
 	{
@@ -906,31 +975,279 @@ public class LivingPopulationManager
 		{
 			return;
 		}
+		final long now = System.currentTimeMillis();
 		final ColdBot merchant = merchantBot();
-		for (GearOrders.Order gone : _gearOrders.expire(System.currentTimeMillis(), params.wishMs(), params.readyMs(), 24L * 3_600_000L))
+		// A player that has not come for its piece in an hour: she is refunded and keeps the materials.
+		for (GearOrders.Order late : _gearOrders.orders(GearOrders.State.READY))
+		{
+			if ((_requests.spent(late.botId()) != null) && ((now - late.at()) > PlayerRequests.HOLD_MS) && (_gearOrders.remove(late.botId()) != null))
+			{
+				lapse(late, merchant);
+			}
+		}
+		for (GearOrders.Order gone : _gearOrders.expire(now, params.wishMs(), params.readyMs(), 24L * 3_600_000L))
 		{
 			if (gone.state() == GearOrders.State.WISH)
 			{
+				if (_requests.remove(gone.botId()) != null)
+				{
+					tell(gone.botId(), "Your request has waited too long, so I've let it go and released the materials I set aside.");
+				}
 				continue;
 			}
-			if (gone.advance() > 0L)
+			lapse(gone, merchant);
+		}
+	}
+
+	/**
+	 * An order ended without the hunter or player paying for it. The hunter gets its advance back. If a player's order lapsed,
+	 * Sateya is refunded what she laid out and keeps the materials for other crafts; otherwise a piece nobody came for goes to
+	 * a vendor at half its reference price, paid to her.
+	 */
+	private void lapse(GearOrders.Order gone, ColdBot merchant)
+	{
+		if (gone.advance() > 0L)
+		{
+			payOwner(gone.botId(), gone.advance());
+			if (merchant != null)
 			{
-				payOwner(gone.botId(), gone.advance());
-				if (merchant != null)
+				synchronized (merchant)
 				{
-					synchronized (merchant)
-					{
-						merchant.setAdena(Math.max(0L, merchant.getAdena() - gone.advance()));
-					}
+					merchant.setAdena(Math.max(0L, merchant.getAdena() - gone.advance()));
 				}
 			}
-			if ((gone.state() == GearOrders.State.READY) && (gone.town() != null) && (_townStock.take(gone.town(), gone.productId(), 1) != null) && (merchant != null))
+		}
+		final boolean piece = (gone.state() == GearOrders.State.READY) && (gone.town() != null) && (_townStock.take(gone.town(), gone.productId(), 1) != null);
+		final PlayerRequests.Spent spent = _requests.settle(gone.botId());
+		if ((spent != null) && (merchant != null))
+		{
+			payOwner(merchant.getId(), spent.outlay());
+			final String town = (gone.town() != null) ? gone.town() : GearCrafting.C_TOWN;
+			spent.mats().forEach((item, count) -> _townStock.add(town, merchant.getId(), item, count));
+			tell(gone.botId(), "You didn't come for your order in time, so I've cancelled it" + ((gone.advance() > 0L) ? " and returned your advance." : "."));
+		}
+		else if (piece && (merchant != null))
+		{
+			final ItemTemplate item = ItemData.getInstance().getTemplate(gone.productId());
+			payOwner(merchant.getId(), (item == null) ? 0L : Math.max(0L, item.getReferencePrice() / 2L));
+		}
+	}
+
+	/** Runs out the players' requests and asks a player whether to go ahead when a hunter is held up by what its request set aside. */
+	private void checkRequests()
+	{
+		final long now = System.currentTimeMillis();
+		for (PlayerRequests.Request gone : _requests.expire(now))
+		{
+			_gearOrders.clearWish(gone.playerId());
+			tell(gone.playerId(), "Your request has lapsed, so I've released the materials I set aside.");
+		}
+		_blocked.values().removeIf(entry -> (now - entry[1]) > 30 * 60_000L);
+		final ColdBot merchant = merchantBot();
+		if ((merchant == null) || _blocked.isEmpty())
+		{
+			return;
+		}
+		for (PlayerRequests.Request request : _requests.askable(now))
+		{
+			final GearOrders.Order order = _gearOrders.of(request.playerId());
+			if ((order == null) || (order.state() != GearOrders.State.WISH))
 			{
-				final ItemTemplate item = ItemData.getInstance().getTemplate(gone.productId());
-				payOwner(merchant.getId(), (item == null) ? 0L : Math.max(0L, item.getReferencePrice() / 2L));
+				continue;
+			}
+			// A hunter that could be served if this request's stock were free?
+			final GearCrafting.Market free = snapshotMarket(GearCrafting.STOCK_SHARE, request.playerId());
+			for (long[] entry : _blocked.values())
+			{
+				final GearCrafting.Recipe recipe = gearRecipeOf((int) entry[0]);
+				if ((recipe == null) || !GearCrafting.craftable(recipe, merchant.getLevel(), merchant.getGearRecipes(), free))
+				{
+					continue;
+				}
+				final boolean uses = request.mats().containsKey(recipe.recipeItemId()) || recipe.ingredients().keySet().stream().anyMatch(request.mats()::containsKey);
+				if (uses && _requests.ask(request.playerId(), now))
+				{
+					final ItemTemplate item = ItemData.getInstance().getTemplate(request.productId());
+					tell(request.playerId(), "Another buyer wants materials I set aside for your " + ((item == null) ? "order" : item.getName()) + ". Do you want to go ahead with the exchange now? Whisper me 'yes' to continue, or 'no' and I'll release them (I'll take silence as a no in " + (PlayerRequests.ANSWER_MS / 60_000L) + " minutes).");
+					return;
+				}
 			}
 		}
 	}
+
+	private static final String HELP = "I craft gear to order. Whisper me: craft <item name or id> (the materials are set aside for you), cancel, status, trade (when I tell you it is ready). One request an hour.";
+
+	/**
+	 * A real player's whisper to Sateya that is a command for her gear trade.
+	 * @return whether it was one (she answered it)
+	 */
+	private boolean handleRequestCommand(Player sender, ColdBot bot, String text)
+	{
+		final GearCrafting.Params params = (_merchant == null) ? null : _merchant.gear();
+		if (params == null)
+		{
+			return false;
+		}
+		final String line = text.trim();
+		final String lower = line.toLowerCase(java.util.Locale.ROOT);
+		final long id = sender.getObjectId();
+		final long now = System.currentTimeMillis();
+		final boolean command = _requests.asked(id) ? (lower.equals("yes") || lower.equals("no") || lower.equals("y") || lower.equals("n")) : (lower.startsWith("craft ") || lower.startsWith("order ") || lower.equals("craft") || lower.equals("cancel") || lower.equals("status") || lower.equals("trade") || lower.equals("pay"));
+		if (!command)
+		{
+			return false;
+		}
+		sender.sendPacket(new CreatureSay(sender, ChatType.WHISPER, "->" + bot.getName(), text));
+		String answer;
+		if (_requests.asked(id))
+		{
+			if (lower.startsWith("y"))
+			{
+				_requests.confirm(id, now);
+				final PlayerRequests.Request request = _requests.of(id);
+				if (request != null)
+				{
+					_gearOrders.wish(id, 999, request.productId(), sender.getAdena(), now); // first in line now
+				}
+				answer = "Good, I'll start on it as soon as I'm free.";
+			}
+			else
+			{
+				_requests.remove(id);
+				_gearOrders.clearWish(id);
+				answer = "Alright, I've released the materials.";
+			}
+		}
+		else if (lower.equals("cancel"))
+		{
+			final GearOrders.Order order = _gearOrders.of(id);
+			if ((order != null) && (order.state() != GearOrders.State.WISH))
+			{
+				answer = "I've already started yours, so I can't drop it now. Whisper 'status' to see where it is.";
+			}
+			else
+			{
+				_requests.remove(id);
+				_gearOrders.clearWish(id);
+				answer = (order == null) ? "You have no request with me." : "Done, I've released the materials.";
+			}
+		}
+		else if (lower.equals("status"))
+		{
+			final GearOrders.Order order = _gearOrders.of(id);
+			final long wait = _requests.cooldownLeft(id, now);
+			answer = (order == null) ? ("You have nothing with me." + ((wait > 0L) ? (" You can ask for something new in " + (wait / 60_000L + 1L) + " minutes.") : "")) : switch (order.state())
+			{
+				case WISH -> "Your request is in my queue.";
+				case CRAFTING -> "I'm making it now.";
+				case READY -> "It's ready in " + order.town() + ": whisper 'trade' when you are there with " + order.due() + " adena.";
+			};
+		}
+		else if (lower.equals("trade") || lower.equals("pay"))
+		{
+			answer = playerTrade(sender, bot);
+		}
+		else
+		{
+			answer = playerRequest(sender, line.length() > 6 ? line.substring(6).trim() : "", now);
+		}
+		whisper(sender, bot.getName(), answer);
+		return true;
+	}
+
+	/** Makes a player's request: sets aside the stock its piece needs and queues it. @return what she says */
+	private String playerRequest(Player sender, String what, long now)
+	{
+		final long id = sender.getObjectId();
+		final ColdBot merchant = merchantBot();
+		if ((merchant == null) || what.isEmpty())
+		{
+			return HELP;
+		}
+		if ((_requests.of(id) != null) || (_gearOrders.of(id) != null))
+		{
+			return "You already have an order with me. Whisper 'status'.";
+		}
+		final long wait = _requests.cooldownLeft(id, now);
+		if (wait > 0L)
+		{
+			return "I can only take one request from you an hour. Ask me again in " + (wait / 60_000L + 1L) + " minutes.";
+		}
+		GearCrafting.Recipe recipe = null;
+		for (GearCrafting.Recipe candidate : gearRecipeList())
+		{
+			final ItemTemplate item = ItemData.getInstance().getTemplate(candidate.productId());
+			if ((item != null) && (what.equals(String.valueOf(candidate.productId())) || item.getName().equalsIgnoreCase(what)))
+			{
+				recipe = candidate;
+				break;
+			}
+		}
+		if (recipe == null)
+		{
+			return "I don't know that piece. Give me its exact name or item id.";
+		}
+		final GearCrafting.Market market = snapshotMarket(0.7, id);
+		final GearCrafting.Quote quote = GearCrafting.quote(recipe, merchant.getLevel(), merchant.getGearRecipes(), market, sender.getAdena(), GearCrafting.SURCHARGE_MAX);
+		if (quote == null)
+		{
+			return (GearCrafting.quote(recipe, merchant.getLevel(), merchant.getGearRecipes(), market, Long.MAX_VALUE, GearCrafting.SURCHARGE_MAX) == null) ? "I can't make that right now." : "That would cost more than you have on you.";
+		}
+		final Map<Integer, Long> mats = new HashMap<>();
+		recipe.ingredients().forEach((item, count) -> {
+			final GearCrafting.Cost cost = GearCrafting.cost(item, count, market);
+			if ((cost != null) && (cost.fromStock() > 0L))
+			{
+				mats.put(item, cost.fromStock());
+			}
+		});
+		if (quote.recipeCost() > 0L)
+		{
+			final GearCrafting.Cost cost = GearCrafting.cost(recipe.recipeItemId(), 1L, market);
+			if ((cost != null) && (cost.fromStock() > 0L))
+			{
+				mats.put(recipe.recipeItemId(), cost.fromStock());
+			}
+		}
+		_requests.open(id, sender.getName(), sender.getLevel(), recipe.productId(), mats, now);
+		_gearOrders.wish(id, sender.getLevel(), recipe.productId(), sender.getAdena(), now);
+		return "I can make that for about " + quote.price() + " adena. I've set the materials aside for you. I'll start when it's your turn in my queue and whisper you when it's ready; then come to me and whisper 'trade'. Whisper 'cancel' to drop it.";
+	}
+
+	/** The player is with Sateya in the sale town: it pays and takes its piece. @return what she says */
+	private String playerTrade(Player sender, ColdBot bot)
+	{
+		final long id = sender.getObjectId();
+		final GearOrders.Order order = _gearOrders.of(id);
+		if ((order == null) || (order.state() != GearOrders.State.READY) || (_requests.spent(id) == null))
+		{
+			return "Nothing of yours is ready.";
+		}
+		final ColdLife.Context life = _handoff.life();
+		final ZoneCatalog.Town town = (life == null) ? null : life.catalog().town(order.town());
+		if ((town == null) || (town.arrival().distance(new ZoneCatalog.Point(sender.getX(), sender.getY(), sender.getZ())) > TRADE_RANGE))
+		{
+			return "Come to " + order.town() + " first, then whisper 'trade'.";
+		}
+		if (sender.getAdena() < order.due())
+		{
+			return "You need " + order.due() + " adena for it.";
+		}
+		if (!chargeBot(id, order.due()))
+		{
+			return "I couldn't take the adena. Try again.";
+		}
+		if (!completeTrade(id, order.town(), order.productId(), order.due()))
+		{
+			payOwner(id, order.due());
+			return "I couldn't find your piece. Try again in a moment.";
+		}
+		sender.addItem(ItemProcessType.REWARD, order.productId(), 1, null, true);
+		return "Pleasure doing business. Take care of it.";
+	}
+
+	// How close a player must be to the town's arrival point to trade with her.
+	private static final double TRADE_RANGE = 3000.0;
 
 	/**
 	 * @return the unit price a shot sells at in a shop: its production cost plus 1 once the shop holds enough shots for
@@ -1102,6 +1419,7 @@ public class LivingPopulationManager
 		_stockSaving = _townStockDao.load(_townStock);
 		loadShotDemand();
 		loadGearOrders();
+		loadRequests();
 		_raids = (_raidConfig == null) ? null : new RaidDirector(_random, _raidConfig);
 		_raidBossesLoaded = false;
 		loadRaidTimers();
@@ -1220,6 +1538,7 @@ public class LivingPopulationManager
 		}
 		saveShotDemand();
 		saveGearOrders();
+		saveRequests();
 		saveRaidTimers();
 		saveRaidStats();
 		// Clear in-memory state so a later start() reloads cleanly instead of double-loading the population.
@@ -2350,11 +2669,13 @@ public class LivingPopulationManager
 			}
 			Files.write(path, json.getBytes(StandardCharsets.UTF_8));
 			sweepTownStock();
+			checkRequests();
 			expireGearOrders();
 			syncShopkeepers();
 			saveTownStock();
 			saveShotDemand();
 			saveGearOrders();
+			saveRequests();
 			if ((_raids != null) && _raids.dirty())
 			{
 				saveRaidTimers();
@@ -2387,6 +2708,11 @@ public class LivingPopulationManager
 				}
 				return;
 			}
+		}
+		final Player player = World.getInstance().getPlayer((int) id); // a real player (a refund, say)
+		if (player != null)
+		{
+			player.addAdena(ItemProcessType.REWARD, (int) Math.min(Integer.MAX_VALUE, Math.max(0L, adena)), null, true);
 		}
 	}
 
@@ -2750,6 +3076,44 @@ public class LivingPopulationManager
 		}
 	}
 
+	private Path requestsFile()
+	{
+		return Path.of(_config.snapshotFile()).resolveSibling("LivingPopulation-gearrequests.txt");
+	}
+
+	private void loadRequests()
+	{
+		try
+		{
+			final Path file = requestsFile();
+			if (Files.exists(file))
+			{
+				_requests.decode(Files.readString(file, StandardCharsets.UTF_8));
+			}
+		}
+		catch (Exception e)
+		{
+			LOGGER.log(Level.WARNING, "LivingPopulation: could not read the gear requests file: " + e.getMessage(), e);
+		}
+	}
+
+	private void saveRequests()
+	{
+		try
+		{
+			final Path file = requestsFile();
+			if (file.getParent() != null)
+			{
+				Files.createDirectories(file.getParent());
+			}
+			Files.write(file, _requests.encode().getBytes(StandardCharsets.UTF_8));
+		}
+		catch (Exception e)
+		{
+			LOGGER.log(Level.WARNING, "LivingPopulation: could not save the gear requests: " + e.getMessage(), e);
+		}
+	}
+
 	private void saveGearOrders()
 	{
 		try
@@ -3091,6 +3455,10 @@ public class LivingPopulationManager
 		if (bot == null)
 		{
 			return false;
+		}
+		if (ShotCrafting.MERCHANT.equalsIgnoreCase(bot.getName()) && handleRequestCommand(sender, bot, text))
+		{
+			return true; // a command for her gear trade: she answered it
 		}
 		final Player live = PhantomManager.getInstance().livingPopulationPhantoms().get(bot.getId());
 		final int level = (live != null) ? live.getLevel() : bot.getLevel();
