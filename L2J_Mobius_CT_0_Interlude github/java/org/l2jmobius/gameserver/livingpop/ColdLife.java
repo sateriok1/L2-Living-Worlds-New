@@ -127,6 +127,12 @@ public final class ColdLife
 		{
 			return prices(level, gearTier);
 		}
+
+		/** @return what a vendor pays for one of an item (half its reference price), 0 when unknown */
+		default long vendorPrice(int itemId)
+		{
+			return 0L;
+		}
 	}
 
 	/** Each class's skill tree, read from the real skill data by the manager. */
@@ -257,6 +263,13 @@ public final class ColdLife
 
 		/** @return what a shot costs in the shops of a town now */
 		long shotPrice(String town, int shotItemId);
+
+		/**
+		 * Takes D or C shots a bot has outgrown back into the shop that sells them: the shots go onto the shop's shelf and the
+		 * Merchant pays for them at the price the shop sells at now.
+		 * @return the adena the bot is paid, or -1 when these are not the Merchant's shots
+		 */
+		long buyBack(int shotItemId, long count);
 
 		/** Takes shots out of a town's shops for a buyer and pays their owner what the buyer pays. @return whether that many were there */
 		boolean buyShots(String town, int shotItemId, long count, long unitPrice);
@@ -740,6 +753,7 @@ public final class ColdLife
 				events.add(new DecisionLog.Event(null, "Sold its loot in " + town.name() + " for " + DecisionLog.num(sold) + " adena"));
 			}
 		}
+		sellOldShots(bot, town, context, events);
 		if (town.hasGrocer())
 		{
 			final SupplyPlanner.Prices listed = context.priceBook().prices(bot.getLevel(), bot.getGearTier(), bot.getClassId());
@@ -781,6 +795,7 @@ public final class ColdLife
 
 		// Gear, piece by piece, with what is left after supplies.
 		shopGear(bot, town, context, events);
+		sellOldShots(bot, town, context, events); // a weapon bought just now may have made its shots useless
 		bot.setShoppedAt(now);
 
 		// Business with a class master or its trainer comes before any break.
@@ -801,6 +816,36 @@ public final class ColdLife
 			return;
 		}
 		leaveTown(bot, now, context, events);
+	}
+
+	/**
+	 * When the shots a bot fires change (it upgraded its weapon, or changed class), the ones it still holds are of no use:
+	 * it sells them to the vendor at half their reference price.
+	 */
+	private static void sellOldShots(ColdBot bot, Town town, Context context, List<DecisionLog.Event> events)
+	{
+		final Workshop shop = context.workshop();
+		final int current = (shop != null) ? shop.shotFor(bot) : LivingSupplies.shotIdForGrade(bot.getClassId(), gradesOf(bot, context.gear(), context.supply().gearTierLevelStep())[0], false);
+		final int old = bot.getShotItem();
+		bot.setShotItem(current);
+		if ((old == 0) || (old == current) || (bot.getSoulshots() <= 0L))
+		{
+			return;
+		}
+		final long sold = bot.getSoulshots();
+		final long back = (shop != null) ? shop.buyBack(old, sold) : -1L;
+		final ShotCrafting.Recipe recipe = ShotCrafting.byShot(old);
+		final long proceeds = (back >= 0L) ? back : (sold * Math.max(0L, context.priceBook().vendorPrice(old)));
+		bot.setSoulshots(0L);
+		bot.setAdena(Math.min(ColdEconomy.MAX_ADENA, bot.getAdena() + proceeds));
+		if (back >= 0L)
+		{
+			events.add(new DecisionLog.Event(null, "Sold its " + DecisionLog.num(sold) + " old shots (item " + old + ") back to the shop in " + recipe.saleTown() + " for " + DecisionLog.num(proceeds) + " adena, now that it fires item " + current));
+		}
+		else
+		{
+			events.add(new DecisionLog.Event(null, "Sold its " + DecisionLog.num(sold) + " old shots (item " + old + ") to the vendor in " + town.name() + " for " + DecisionLog.num(proceeds) + " adena, now that it fires item " + current));
+		}
 	}
 
 	/** @return whether this bot fires shots only the Merchant makes (D grade and better) */
@@ -874,6 +919,23 @@ public final class ColdLife
 		bot.setLeg(TravelLeg.stay(dest.arrival(), now, context.travel().escapeCastMs()));
 		events.add(new DecisionLog.Event(null, "Goes to " + dest.name() + " for shots (gatekeeper " + DecisionLog.num(fee) + " adena)"));
 		return true;
+	}
+
+	/**
+	 * The Merchant does her town business and crafting trips cold, so a player walking up to her cannot break a trip in the
+	 * middle. She is only a live character while she hunts or walks to her hunting zone.
+	 * @param bot a bot
+	 * @param context the life context
+	 * @return whether the bot has to be cold now
+	 */
+	public static boolean staysCold(ColdBot bot, Context context)
+	{
+		if ((context == null) || (context.workshop() == null) || !isCrafter(bot.getClassId()) || !ShotCrafting.MERCHANT.equalsIgnoreCase(bot.getName()))
+		{
+			return false;
+		}
+		final String activity = bot.getActivity();
+		return !isHunting(activity) && !TO_ZONE.equals(activity);
 	}
 
 	/** @return whether this class can craft the dwarven shot recipes (Artisan and Warsmith); only the Merchant, Sateya, does */

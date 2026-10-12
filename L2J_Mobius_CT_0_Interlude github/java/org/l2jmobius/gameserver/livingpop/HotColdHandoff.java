@@ -402,7 +402,7 @@ public class HotColdHandoff
 			{
 				break;
 			}
-			if (bot.isHotLock() || _hot.containsKey(bot.getId()) || _pending.contains(bot.getId()) || _orphans.contains(bot.getId()))
+			if (bot.isHotLock() || _hot.containsKey(bot.getId()) || _pending.contains(bot.getId()) || _orphans.contains(bot.getId()) || ColdLife.staysCold(bot, _life))
 			{
 				continue;
 			}
@@ -527,6 +527,12 @@ public class HotColdHandoff
 		}
 		entry._deadSince = 0;
 		final String activity = (bot.getActivity() == null) ? ColdLife.HUNTING : bot.getActivity();
+
+		if (ColdLife.staysCold(bot, life))
+		{
+			cool(bot, player, now); // the Merchant does her town business and trips cold, so nobody breaks one
+			return;
+		}
 
 		if (ColdLife.isHunting(activity))
 		{
@@ -1067,7 +1073,7 @@ public class HotColdHandoff
 	 */
 	public void activateForParty(ColdBot bot, long now)
 	{
-		if (bot.isHotLock() || _hot.containsKey(bot.getId()) || _pending.contains(bot.getId()) || _orphans.contains(bot.getId()))
+		if (bot.isHotLock() || _hot.containsKey(bot.getId()) || _pending.contains(bot.getId()) || _orphans.contains(bot.getId()) || ColdLife.staysCold(bot, _life))
 		{
 			return;
 		}
@@ -1464,6 +1470,25 @@ public class HotColdHandoff
 			return false;
 		}
 		player.addAdena(ItemProcessType.REWARD, (int) Math.min(Integer.MAX_VALUE, adena), null, false);
+		return true;
+	}
+
+	/**
+	 * Takes adena from a bot's live character.
+	 * @param id the bot's id
+	 * @param adena the adena
+	 * @return false when the bot has no live character (charge its row instead)
+	 */
+	public boolean chargeHot(long id, long adena)
+	{
+		final HotEntry entry = _hot.get(id);
+		final Player player = (entry == null) ? null : entry._player;
+		if (player == null)
+		{
+			return false;
+		}
+		final long held = player.getAdena();
+		player.reduceAdena(ItemProcessType.REWARD, (int) Math.max(0L, Math.min(Integer.MAX_VALUE, Math.min(adena, held))), null, false);
 		return true;
 	}
 

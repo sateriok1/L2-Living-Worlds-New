@@ -574,7 +574,18 @@ public class LivingTravelTest
 			@Override
 			public int shotFor(ColdBot bot)
 			{
-				return 1463;
+				return (bot.getLevel() >= 50) ? 1464 : 1463;
+			}
+
+			@Override
+			public long buyBack(int shotItemId, long count)
+			{
+				if ((shotItemId != 1463) && (shotItemId != 1464))
+				{
+					return -1L;
+				}
+				shotStock.merge("Gludio:" + shotItemId, count, Long::sum);
+				return count * 14L;
 			}
 
 			@Override
@@ -704,6 +715,39 @@ public class LivingTravelTest
 		check("with shots in the Gludio shop it goes there and buys them", (hunter.getSoulshots() > 0L) && (sold.size() == 1) && sold.get(0).startsWith("Gludio:1463:") && sold.get(0).endsWith(":14"));
 		check("the shots left the stock", shotStock.get("Gludio:1463") == (5000L - hunter.getSoulshots()));
 		check("and they cost the shop price", hunter.getAdena() <= (100_000L - (hunter.getSoulshots() * 14L)));
+
+		// Old shots are sold to the vendor once the shots a bot fires change.
+		final ColdBot upgrader = bot(25, "Hunt", 10_000L, 10L, 2L, 0);
+		upgrader.setSoulshots(3000L);
+		upgrader.setShotItem(1835);
+		upgrader.setTown("Giran");
+		upgrader.setActivity(ColdLife.IN_TOWN);
+		upgrader.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		final List<DecisionLog.Event> upLog = new ArrayList<>();
+		runUntil(upgrader, 1L, context, upLog, b -> !ColdLife.IN_TOWN.equals(b.getActivity()));
+		check("its old shots are sold when the shots it fires change", upLog.stream().anyMatch(e -> e.text().startsWith("Sold its 3,000 old shots (item 1835)")) && (upgrader.getShotItem() == 1463));
+		final ColdBot steady = bot(25, "Hunt", 10_000L, 10L, 2L, 0);
+		steady.setSoulshots(3000L);
+		steady.setShotItem(1463);
+		steady.setTown("Giran");
+		steady.setActivity(ColdLife.IN_TOWN);
+		steady.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		final List<DecisionLog.Event> steadyLog = new ArrayList<>();
+		runUntil(steady, 1L, context, steadyLog, b -> !ColdLife.IN_TOWN.equals(b.getActivity()));
+		check("shots of the grade it fires are kept", steadyLog.stream().noneMatch(e -> e.text().startsWith("Sold its")) && (steady.getSoulshots() >= 3000L));
+
+		// Outgrown D shots go back onto the shop's shelf and the bot is paid the shop price.
+		shotStock.clear();
+		final ColdBot grown = bot(50, "Hunt", 10_000L, 10L, 2L, 0);
+		grown.setSoulshots(1000L);
+		grown.setShotItem(1463);
+		grown.setTown("Giran");
+		grown.setActivity(ColdLife.IN_TOWN);
+		grown.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		final List<DecisionLog.Event> grownLog = new ArrayList<>();
+		runUntil(grown, 1L, context, grownLog, b -> !ColdLife.IN_TOWN.equals(b.getActivity()));
+		check("outgrown D shots go back to the shop", grownLog.stream().anyMatch(e -> e.text().startsWith("Sold its 1,000 old shots (item 1463) back to the shop in Gludio for 14,000 adena")) && (shotStock.getOrDefault("Gludio:1463", 0L) == 1000L) && (grown.getShotItem() == 1464));
+		check("the bot is paid what the shop charges", grown.getAdena() >= 10_000L);
 
 		// Above the free-teleport level the Merchant still pays no fee between towns (alt and warehouse), only the isle.
 		shotStock.clear();

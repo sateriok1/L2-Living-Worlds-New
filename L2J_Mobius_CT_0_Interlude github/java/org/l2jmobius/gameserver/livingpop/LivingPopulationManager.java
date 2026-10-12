@@ -362,6 +362,36 @@ public class LivingPopulationManager
 		}
 
 		@Override
+		public long buyBack(int shotItemId, long count)
+		{
+			final ShotCrafting.Recipe recipe = ShotCrafting.byShot(shotItemId);
+			ColdBot merchant = null;
+			for (ColdBot present : _bots)
+			{
+				if (ShotCrafting.MERCHANT.equalsIgnoreCase(present.getName()))
+				{
+					merchant = present;
+					break;
+				}
+			}
+			if ((recipe == null) || (merchant == null) || (count <= 0L))
+			{
+				return -1L;
+			}
+			final long total = count * shotFloor(shotItemId); // what the shop sells at now
+			_townStock.add(recipe.saleTown(), merchant.getId(), shotItemId, count); // onto the shelf, owned by Sateya, whose sales pay her
+			if (!_handoff.chargeHot(merchant.getId(), total))
+			{
+				synchronized (merchant)
+				{
+					merchant.setAdena(Math.max(0L, merchant.getAdena() - total));
+				}
+			}
+			syncShopkeepers();
+			return total;
+		}
+
+		@Override
 		public boolean buyShots(String town, int shotItemId, long count, long unitPrice)
 		{
 			final List<TownStock.Listing> taken = _townStock.take(town, shotItemId, count);
@@ -1016,6 +1046,13 @@ public class LivingPopulationManager
 			public SupplyPlanner.Prices prices(int level, int gearTier, int classId)
 			{
 				return LivingPopulationManager.this.prices(level, gearTier, classId);
+			}
+
+			@Override
+			public long vendorPrice(int itemId)
+			{
+				final ItemTemplate item = ItemData.getInstance().getTemplate(itemId);
+				return (item == null) ? 0L : Math.max(0L, item.getReferencePrice() / 2L);
 			}
 		};
 		final Map<String, Integer> occupancy = (travel || (_respawnLimit && combat.enabled())) ? zoneOccupancy() : null;
