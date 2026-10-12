@@ -25,6 +25,7 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 import org.l2jmobius.gameserver.livingpop.ClassPath;
 import org.l2jmobius.gameserver.livingpop.ColdBot;
@@ -107,6 +108,7 @@ public class LivingTravelTest
 		testColdRisk();
 		testColdDeathAndRest();
 		testWaryAfterDeath();
+		testMerchantGearErrand();
 		testLivingChat();
 		testClassPath();
 		testClassChange();
@@ -1439,6 +1441,183 @@ public class LivingTravelTest
 		check("and one that did not keeps its zone", "Near Woods".equals(fine.getZone()));
 	}
 
+	private static void testMerchantGearErrand() throws Exception
+	{
+		// A D piece (product 100, recipe 900, Create Item 2) she can quote from the town stock; a player (id 7) wishes for it.
+		final GearCrafting.Recipe piece = new GearCrafting.Recipe(900, 100, 1, Map.of(1, 4, 2, 2), 1, 2);
+		final Map<Integer, Long> reference = Map.of(1, 100L, 2, 500L, 100, 5000L, 900, 1000L);
+		final Map<Integer, Long> stock = Map.of(1, 10L, 2, 10L, 900, 1L);
+		final GearOrders book = new GearOrders();
+		final long[] funds = {50_000L};
+		final ColdLife.Workshop shop = new ColdLife.Workshop()
+		{
+			@Override
+			public ShotCrafting.Prices prices()
+			{
+				return ShotCrafting.Prices.standard();
+			}
+
+			@Override
+			public Map<Integer, Double> wanted()
+			{
+				return Map.of(); // the shots need nothing
+			}
+
+			@Override
+			public long onSale(String town, int shotItemId)
+			{
+				return 0L;
+			}
+
+			@Override
+			public int shotFor(ColdBot bot)
+			{
+				return 1463;
+			}
+
+			@Override
+			public long buyBack(int shotItemId, long count)
+			{
+				return -1L;
+			}
+
+			@Override
+			public long shotPrice(String town, int shotItemId)
+			{
+				return 14L;
+			}
+
+			@Override
+			public boolean buyShots(String town, int shotItemId, long count, long unitPrice)
+			{
+				return false;
+			}
+
+			@Override
+			public String recipeTown(int recipeItemId, String preferred)
+			{
+				return null;
+			}
+
+			@Override
+			public long recipePrice(int recipeItemId)
+			{
+				return 5000L;
+			}
+
+			@Override
+			public boolean buyRecipe(String town, int recipeItemId, long price)
+			{
+				return false;
+			}
+
+			@Override
+			public void list(String town, long owner, int shotItemId, long count)
+			{
+			}
+
+			@Override
+			public long craftMs()
+			{
+				return 30 * 60_000L;
+			}
+
+			@Override
+			public double hoursOfStock()
+			{
+				return 2.0;
+			}
+
+			@Override
+			public long maxCrafts()
+			{
+				return 100L;
+			}
+
+			@Override
+			public GearCrafting.Params gearParams()
+			{
+				return new GearCrafting.Params(0L, 0.5, 45.0, 120_000L, 1_200_000L, 0.6, 0.8, 21_600_000L, 86_400_000L);
+			}
+
+			@Override
+			public GearCrafting.Market gearMarket(double share)
+			{
+				return market(stock, reference, Map.of());
+			}
+
+			@Override
+			public List<GearCrafting.Recipe> gearRecipes()
+			{
+				return List.of(piece);
+			}
+
+			@Override
+			public long gearFunds(long botId)
+			{
+				return funds[0];
+			}
+
+			@Override
+			public List<GearOrders.Order> gearWishes()
+			{
+				return book.wishes();
+			}
+
+			@Override
+			public List<String> gearAccept(GearOrders.Order wish, GearCrafting.Quote quote, long advance, long craftMs, long now)
+			{
+				book.accept(wish.botId(), quote.price(), advance, craftMs, "Giran", now);
+				return List.of("Giran");
+			}
+		};
+		final ColdLife.Params travel = new ColdLife.Params(100.0, 20_000L, 10_000L, 0, 60_000L, 60_000L, 4.0, 8, 300_000L, 2500.0, 6.0, 40);
+		final ColdLife.Context context = new ColdLife.Context(ZoneCatalog.parse(MERCHANT_XML), supply(), travel, (level, tier) -> prices(), new HashMap<>(), new Random(7), null, level -> 0L, null, null, null, null, shop);
+
+		final Supplier<ColdBot> merchant = () ->
+		{
+			final ColdBot sateya = bot(25, "Hunt", 100_000L, 1_000_000L, 5L, 5200);
+			sateya.setClassId(56);
+			sateya.setName("Sateya");
+			sateya.setSoulshots(10_000_000L);
+			sateya.setGearTier(9);
+			return sateya;
+		};
+		// Nobody wishes for anything: she keeps hunting.
+		final ColdBot idle = merchant.get();
+		ColdLife.advance(idle, 3_600_000L, 3_600_000L, context, new ArrayList<>());
+		check("with no wish and nothing to make she keeps hunting", ColdLife.HUNTING.equals(idle.getActivity()) && (idle.getTown() == null));
+		// A player wishes for the piece: she goes to town and takes the order.
+		book.wish(7L, 40, 100, 50_000L, 1000L);
+		final ColdBot taker = merchant.get();
+		final List<DecisionLog.Event> takerLog = new ArrayList<>();
+		for (int hour = 1; (hour <= 3) && (book.crafting() == null); hour++)
+		{
+			ColdLife.advance(taker, hour * 3_600_000L, 3_600_000L, context, takerLog);
+		}
+		check("a wish she can quote sends her to town, and she takes the order", (book.crafting() != null) && (book.crafting().botId() == 7L));
+		check("the plan named the gear order as the reason", takerLog.stream().anyMatch(e -> e.text().contains("A hunter's order for a piece of gear is waiting")));
+		// The hunter can no longer pay: no errand.
+		final GearOrders fresh = new GearOrders();
+		fresh.wish(7L, 40, 100, 50_000L, 1000L);
+		book.decode(fresh.encode());
+		funds[0] = 10L;
+		final ColdBot broke = merchant.get();
+		ColdLife.advance(broke, 3_600_000L, 3_600_000L, context, new ArrayList<>());
+		check("a wish the hunter cannot pay for sends her nowhere", ColdLife.HUNTING.equals(broke.getActivity()) && (broke.getTown() == null));
+		funds[0] = 50_000L;
+		// Goods still to sell: blocked.
+		final ColdBot carrying = merchant.get();
+		carrying.setCarry(1463, 100L, "Gludio");
+		ColdLife.advance(carrying, 3_600_000L, 3_600_000L, context, new ArrayList<>());
+		check("with unsold goods in her bag the gear order waits too", ColdLife.HUNTING.equals(carrying.getActivity()) && (carrying.getTown() == null));
+		// Not the Merchant: never.
+		final ColdBot artisan = merchant.get();
+		artisan.setName("Other");
+		ColdLife.advance(artisan, 3_600_000L, 3_600_000L, context, new ArrayList<>());
+		check("another Artisan never gets the gear errand", ColdLife.HUNTING.equals(artisan.getActivity()) && (artisan.getTown() == null));
+	}
+
 	private static void testLivingChat()
 	{
 		check("a hunting bot says where it hunts", LivingChat.activity(ColdLife.HUNTING, "Ruins of Agony", null).equals("hunting in Ruins of Agony") && LivingChat.activity(null, null, null).equals("hunting"));
@@ -1711,6 +1890,12 @@ public class LivingTravelTest
 		ColdLife.prepareForRaid(stocked, context(0), stockedLog);
 		check("one that is stocked already buys nothing", stockedLog.isEmpty() && (stocked.getAdena() == 50_000L));
 		check("one before its level, or past its class change, is", !ColdLife.classChangePending(early, classes) && !ColdLife.classChangePending(done, classes) && !ColdLife.classChangePending(due, context(0)));
+		final ColdBot brokeRaider = bot(40, "Near Woods", 0L, 0L, 2L, 0);
+		brokeRaider.setLoot(0L);
+		final ColdBot richRaider = bot(40, "Near Woods", 50_000L, 0L, 2L, 0);
+		final ColdBot stockedRaider = bot(40, "Near Woods", 0L, 15L, 2L, 0);
+		check("a bot with no potions and no money to buy any is not fit for a raid", !ColdLife.canSupplyForRaid(brokeRaider, context(0)));
+		check("one that can afford potions, or has them, is", ColdLife.canSupplyForRaid(richRaider, context(0)) && ColdLife.canSupplyForRaid(stockedRaider, context(0)));
 		final ColdLife.Needs owed = ColdLife.needsOf(due, null, classes, 0L);
 		check("the needs snapshot reports the pending class change that keeps a bot out of raids", owed.classPending() && !owed.anyOpen());
 		check("a bot with no town has no errands", (owed.classErrand()[0] == null) && (owed.craftErrand()[0] == null));

@@ -622,7 +622,7 @@ public final class ColdLife
 	 */
 	public static Needs needsOf(ColdBot bot, Town town, Context context, long now)
 	{
-		return new Needs(classErrand(bot, town, context), skillErrand(bot, town, context), gearErrand(bot, town, context, now), craftErrand(bot, town, context), classChangePending(bot, context));
+		return new Needs(classErrand(bot, town, context), skillErrand(bot, town, context), gearErrand(bot, town, context, now), craftErrand(bot, town, context, now), classChangePending(bot, context));
 	}
 
 	/**
@@ -920,6 +920,28 @@ public final class ColdLife
 	/**
 	 * A raid party wiped and tries again: the bot dies and loses experience as for any death, but stays with the party (it runs back to the boss).
 	 */
+	/**
+	 * Whether a bot would go into a raid with potions: it has them, or a stop at the grocer (with its loot sold first) would
+	 * leave it with enough. A bot that is out of potions and too poor to buy any would only die in the fight, so the raid
+	 * director leaves it hunting. (Its other needs, such as gear, do not matter for a raid.)
+	 * @param bot the bot
+	 * @param context the shared context
+	 * @return whether it can be ready for a raid
+	 */
+	public static boolean canSupplyForRaid(ColdBot bot, Context context)
+	{
+		final SupplyPlanner.Params supply = supplyFor(bot, context);
+		if (!SupplyPlanner.potionsLow(bot.getPotions(), supply))
+		{
+			return true;
+		}
+		final SupplyPlanner.Prices listed = context.priceBook().prices(bot.getLevel(), bot.getGearTier(), bot.getClassId());
+		final SupplyPlanner.Prices prices = new SupplyPlanner.Prices(listed.potion(), buysShotsInShops(bot, context) ? NO_GROCER_SHOTS : listed.soulshot(), listed.escape(), NO_GROCER_SHOTS);
+		final long adena = Math.min(ColdEconomy.MAX_ADENA, bot.getAdena() + bot.getLoot());
+		final SupplyPlanner.Purchase bought = SupplyPlanner.shop(bot.getLevel(), adena, bot.getEscapes(), bot.getPotions(), bot.getSoulshots(), bot.getGearTier(), bot.isRewardClaimed(), prices, supply);
+		return !SupplyPlanner.potionsLow(bot.getPotions() + bought.potions(), supply);
+	}
+
 	/**
 	 * A bot picked for a raid stops at the nearest grocer first and stocks up on what the fight uses: it sells its loot, then
 	 * buys potions, soulshots and scrolls up to its usual stock with what it can spend. It buys no gear (that waits for its
@@ -1322,7 +1344,7 @@ public final class ColdLife
 	 * errand only shows when the trip would actually go.
 	 * @return the reason, then the blocker (each null when absent)
 	 */
-	private static String[] craftErrand(ColdBot bot, Town town, Context context)
+	private static String[] craftErrand(ColdBot bot, Town town, Context context, long now)
 	{
 		final String[] errand = new String[2];
 		final Workshop shop = context.workshop();
@@ -1344,16 +1366,17 @@ public final class ColdLife
 			held.put(recipe.shotItemId(), shop.onSale(recipe.saleTown(), recipe.shotItemId()));
 		}
 		final MerchantPlanner.Plan plan = MerchantPlanner.decide(bot.getRecipes(), bot.getLevel(), wanted, held, shop.hoursOfStock(), shop.maxCrafts(), bot.getAdena() - reserve - fee, shop.prices());
-		if (!learnable && (plan == null))
+		final boolean gearWork = !learnable && (plan == null) && gearWorkPending(bot, shop, now, reserve, context);
+		if (!learnable && (plan == null) && !gearWork)
 		{
 			return errand; // nothing worth crafting: no errand, she keeps hunting
 		}
-		errand[0] = (plan != null) ? ("Hunters want shot " + plan.recipe().shotItemId() + " and she can make " + DecisionLog.num(plan.shots()) + " of it") : ("The recipe for shot " + learn.shotItemId() + " is in stock");
+		errand[0] = gearWork ? "A hunter's order for a piece of gear is waiting for her" : (plan != null) ? ("Hunters want shot " + plan.recipe().shotItemId() + " and she can make " + DecisionLog.num(plan.shots()) + " of it") : ("The recipe for shot " + learn.shotItemId() + " is in stock");
 		if (bot.getCarryCount() > 0L)
 		{
 			errand[1] = "she is still carrying goods to sell";
 		}
-		else if (!learnable && (plan.crafts() >= shop.isleMinCrafts()) && !canIsle)
+		else if (!learnable && (plan != null) && (plan.crafts() >= shop.isleMinCrafts()) && !canIsle)
 		{
 			errand[1] = "she has no way to the isle and back (a Scroll of Escape is needed)";
 		}
@@ -1438,6 +1461,91 @@ public final class ColdLife
 		return true;
 	}
 
+	/** A gear wish she can quote now: the recipe, the quote and the advance the hunter has to put up. */
+	private record GearOffer(GearCrafting.Recipe recipe, GearCrafting.Quote quote, long advance)
+	{
+	}
+
+	/**
+	 * Quotes one wish with the given stock and surcharge shares: the hunter's means are read now, the stock is looked up, and
+	 * she lays out only what she can afford (the hunter advances the rest, if it can).
+	 * @return the offer, or null when the hunter cannot pay, the piece is not craftable now, or the stock is short
+	 */
+	private static GearOffer gearOffer(ColdBot bot, Workshop shop, GearCrafting.Params params, GearOrders.Order wish, long reserve, long levelFund, double share, double surchargeShare, Context context)
+	{
+		final ColdBot wisher = shop.gearBot(wish.botId());
+		final long funds = shop.gearFunds(wish.botId());
+		if (funds < 0L)
+		{
+			return null;
+		}
+		// A player asking for a piece pays from its purse; a hunter from what it may spend on gear.
+		final long budget = (wisher == null) ? funds : upgradeBudget(wisher, funds, context);
+		if (budget <= 0L)
+		{
+			return null;
+		}
+		GearCrafting.Recipe recipe = null;
+		for (GearCrafting.Recipe candidate : shop.gearRecipes())
+		{
+			if (candidate.productId() == wish.productId())
+			{
+				recipe = candidate;
+				break;
+			}
+		}
+		final GearCrafting.Market market = (recipe == null) ? null : shop.gearMarket(share, wish.botId());
+		if (market == null)
+		{
+			return null;
+		}
+		final GearCrafting.Quote quote = GearCrafting.quote(recipe, bot.getLevel(), bot.getGearRecipes(), market, budget, surchargeShare);
+		if (quote == null)
+		{
+			return null;
+		}
+		final long advance = Math.max(0L, quote.outlay() - Math.max(0L, bot.getAdena() - reserve - levelFund));
+		if ((advance > 0L) && ((advance > quote.price()) || (advance > budget)))
+		{
+			return null;
+		}
+		return new GearOffer(recipe, quote, advance);
+	}
+
+	/**
+	 * @return whether she has gear work to do on a town visit: an order of hers to resume, or a hunter's wish she could quote
+	 *         now (judged at the middle of her stock and surcharge shares). It follows the same rest rule as {@link #gearTrip}.
+	 */
+	private static boolean gearWorkPending(ColdBot bot, Workshop shop, long now, long reserve, Context context)
+	{
+		final GearCrafting.Params params = shop.gearParams();
+		if (params == null)
+		{
+			return false;
+		}
+		if (shop.gearCrafting() != null)
+		{
+			return true;
+		}
+		final boolean resting = now < bot.getGearRestUntil();
+		final SkillPlanner.Lesson lesson = previewLesson(bot, trainingBudget(bot, purse(bot), context), context);
+		final long levelFund = (lesson == null) ? 0L : Math.max(0L, lesson.adena());
+		final double share = (params.shareMin() + params.shareMax()) / 2.0;
+		final double surchargeShare = (GearCrafting.SURCHARGE_MIN + GearCrafting.SURCHARGE_MAX) / 2.0;
+		for (GearOrders.Order wish : shop.gearWishes())
+		{
+			if (resting && (shop.gearBot(wish.botId()) != null))
+			{
+				continue;
+			}
+			if (gearOffer(bot, shop, params, wish, reserve, levelFund, share, surchargeShare, context) != null)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/**
 	 * The Merchant's gear business, when the shots need nothing: she works the book of orders, the strongest hunter first, one
 	 * craft at a time. For the first wish she can fill she rolls the share she pays for stock (60 to 80% of the reference
@@ -1476,46 +1584,16 @@ public final class ColdLife
 			{
 				continue;
 			}
-			// The hunter's means are read again now: with too little it is skipped and she moves on to the next in line.
-			final ColdBot wisher = shop.gearBot(wish.botId());
-			final long funds = shop.gearFunds(wish.botId());
-			if (funds < 0L)
-			{
-				continue;
-			}
-			// A player asking for a piece pays from its purse; a hunter from what it may spend on gear.
-			final long budget = (wisher == null) ? funds : upgradeBudget(wisher, funds, context);
-			if (budget <= 0L)
-			{
-				continue;
-			}
-			GearCrafting.Recipe recipe = null;
-			for (GearCrafting.Recipe candidate : shop.gearRecipes())
-			{
-				if (candidate.productId() == wish.productId())
-				{
-					recipe = candidate;
-					break;
-				}
-			}
 			final double share = params.shareMin() + (random.nextDouble() * Math.max(0.0, params.shareMax() - params.shareMin()));
-			final GearCrafting.Market market = (recipe == null) ? null : shop.gearMarket(share, wish.botId());
-			if (market == null)
-			{
-				continue;
-			}
 			final double surchargeShare = GearCrafting.SURCHARGE_MIN + (random.nextDouble() * (GearCrafting.SURCHARGE_MAX - GearCrafting.SURCHARGE_MIN));
-			final GearCrafting.Quote quote = GearCrafting.quote(recipe, bot.getLevel(), bot.getGearRecipes(), market, budget, surchargeShare);
-			if (quote == null)
+			final GearOffer offer = gearOffer(bot, shop, params, wish, reserve, levelFund, share, surchargeShare, context);
+			if (offer == null)
 			{
-				continue; // not craftable now, or more than the hunter can pay
+				continue; // the hunter cannot pay, it is not craftable now, or the stock is short: next order
 			}
-			// She lays out only what she can afford; the hunter advances the rest, if it can.
-			final long advance = Math.max(0L, quote.outlay() - Math.max(0L, bot.getAdena() - reserve - levelFund));
-			if ((advance > 0L) && ((advance > quote.price()) || (advance > budget)))
-			{
-				continue;
-			}
+			final GearCrafting.Recipe recipe = offer.recipe();
+			final GearCrafting.Quote quote = offer.quote();
+			final long advance = offer.advance();
 			final long craftMs = Math.round(GearCrafting.craftMinutes(params.craftBaseMinutes(), recipe.craftLevel(), GearCrafting.craftLevelFor(bot.getLevel())) * 60_000.0);
 			final List<String> towns = shop.gearAccept(wish, quote, advance, craftMs, now);
 			if (towns == null)
