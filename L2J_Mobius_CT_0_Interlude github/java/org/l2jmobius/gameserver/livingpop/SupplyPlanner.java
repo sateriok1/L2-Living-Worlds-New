@@ -59,6 +59,15 @@ public final class SupplyPlanner
 		}
 
 		/**
+		 * @param rate this bot's own kills a minute (from the zone model)
+		 * @return the same tuning at that rate; a rate of zero or less keeps the flat one
+		 */
+		public Params withKillsPerMinute(double rate)
+		{
+			return (rate <= 0.0) ? this : new Params(potionStock, potionRestockFraction, soulshotStockMinutes, soulshotRestockFraction, escapeStock, reserveFloor, reservePerLevel, reserveFraction, rate, soulshotsPerKill, gearUpgradeCost, gearTierLevelStep, soulshotMinPurchase);
+		}
+
+		/**
 		 * @param perKill shots fired per kill for this bot (a caster's spiritshots per kill differ from a fighter's soulshots)
 		 * @return the same tuning with that rate
 		 */

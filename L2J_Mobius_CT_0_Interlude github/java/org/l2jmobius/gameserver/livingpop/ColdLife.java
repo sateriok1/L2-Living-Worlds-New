@@ -2698,7 +2698,7 @@ public final class ColdLife
 
 	private static SupplyPlanner.Params supplyFor(ColdBot bot, Context context)
 	{
-		final SupplyPlanner.Params supply = context.supply().withPotionStock(LivingSupplies.potionStockFor(bot.getClassId(), context.supply().potionStock()));
+		final SupplyPlanner.Params supply = context.supply().withPotionStock(LivingSupplies.potionStockFor(bot.getClassId(), context.supply().potionStock())).withKillsPerMinute(bot.getKillRate()); // its own kill rate, as the zone model last gave it
 		final double hits = shotsPerKill(bot, context.gear(), context.combat(), 1.0, false); // its hits per kill, when the zone model has them
 		if (hits > 0.0)
 		{

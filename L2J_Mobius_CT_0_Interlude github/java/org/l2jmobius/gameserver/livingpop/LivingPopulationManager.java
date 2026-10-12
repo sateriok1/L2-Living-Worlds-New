@@ -1952,6 +1952,7 @@ public class LivingPopulationManager
 			final ColdProgression.Progress progress = ColdProgression.resolve(bot.getLevel(), bot.getExpIntoLevel(), huntedMs, maxLevel, expToNextLevel, expPerMinuteForLevel);
 			// The rate at the level it ends the span on drives the span's kills, adena, soulshots and drops (a span is short).
 			final double botKillsPerMinute = ratePerMinute(combat, bot, progress.level(), flatKillsPerMinute, huntedMs, economyParams, occupancy);
+			bot.setKillRate(combat.enabled() ? botKillsPerMinute : 0.0); // the shot stock target follows it
 			// Kills at the modeled kill rate (a monitor counter), and the experience this span added (it earns SP).
 			final double huntKills = botKillsPerMinute * (huntedMs / 60_000.0);
 			final ZoneCombat.PartyOutcome partyNow = partyChoice(combat, bot, progress.level(), perKillAt.applyAsDouble(progress.level()), botKillsPerMinute, now, expToNextLevel);

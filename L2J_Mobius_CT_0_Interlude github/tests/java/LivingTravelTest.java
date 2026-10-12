@@ -1896,6 +1896,12 @@ public class LivingTravelTest
 		final ColdBot stockedRaider = bot(40, "Near Woods", 0L, 15L, 2L, 0);
 		check("a bot with no potions and no money to buy any is not fit for a raid", !ColdLife.canSupplyForRaid(brokeRaider, context(0)));
 		check("one that can afford potions, or has them, is", ColdLife.canSupplyForRaid(richRaider, context(0)) && ColdLife.canSupplyForRaid(stockedRaider, context(0)));
+		final SupplyPlanner.Params flatSupply = context(0).supply().withSoulshotsPerKill(3.0);
+		final long flatTarget = SupplyPlanner.soulshotTarget(true, flatSupply);
+		final long fastTarget = SupplyPlanner.soulshotTarget(true, flatSupply.withKillsPerMinute(flatSupply.killsPerMinute() * 2.0));
+		check("a bot's own kill rate sets its shot stock: a fast killer carries more, none given keeps the flat rate", (fastTarget > flatTarget) && (SupplyPlanner.soulshotTarget(true, flatSupply.withKillsPerMinute(0.0)) == flatTarget));
+		brokeRaider.setKillRate(-5.0);
+		check("a kill rate is never negative", brokeRaider.getKillRate() == 0.0);
 		final ColdLife.Needs owed = ColdLife.needsOf(due, null, classes, 0L);
 		check("the needs snapshot reports the pending class change that keeps a bot out of raids", owed.classPending() && !owed.anyOpen());
 		check("a bot with no town has no errands", (owed.classErrand()[0] == null) && (owed.craftErrand()[0] == null));
