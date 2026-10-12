@@ -1363,6 +1363,20 @@ public class LivingTravelTest
 		quick.setClassId(18);
 		runUntil(quick, 0L, instant, new ArrayList<>(), b -> (b.getClassId() != 18));
 		check("no quest hunt when its length is 0", (quick.getClassId() == ClassPath.next(18, quick.getId())) && (quick.getQuest() == null));
+
+		// A bot with its class change to do is not eligible for a raid until it is done.
+		final ColdLife.Context classes = classContext();
+		final ColdBot due = bot(20, "Near Woods", 20_000L, 10L, 2L, 5000);
+		due.setClassId(18);
+		final ColdBot early = bot(19, "Near Woods", 20_000L, 10L, 2L, 5000);
+		early.setClassId(18);
+		final ColdBot questing = bot(25, "Near Woods", 20_000L, 10L, 2L, 5000);
+		questing.setClassId(18);
+		questing.setQuest(new ClassPath.Quest(ClassPath.Stage.HUNT, ClassPath.next(18, questing.getId()), 1L));
+		final ColdBot done = bot(25, "Near Woods", 20_000L, 10L, 2L, 5000);
+		done.setClassId(ClassPath.next(18, done.getId()));
+		check("a bot due its class change is not eligible for raids", ColdLife.classChangePending(due, classes) && ColdLife.classChangePending(questing, classes));
+		check("one before its level, or past its class change, is", !ColdLife.classChangePending(early, classes) && !ColdLife.classChangePending(done, classes) && !ColdLife.classChangePending(due, context(0)));
 	}
 
 	/** A small skill tree: a free skill, two levels of one skill, a spellbook skill, an unsold book, and a level 30 one. */
