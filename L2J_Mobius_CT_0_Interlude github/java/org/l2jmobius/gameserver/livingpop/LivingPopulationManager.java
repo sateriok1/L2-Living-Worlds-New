@@ -129,6 +129,7 @@ public class LivingPopulationManager
 	private final Map<String, Map<Integer, Double>> _zoneItems = new ConcurrentHashMap<>(); // zone|level|spoiler -> sellable items per kill
 	private final TownStock _townStock = new TownStock(); // the items each town holds (what cold bots hunted and sold there)
 	private final TownStockDao _townStockDao = new TownStockDao();
+	private final ShotDemand _shotDemand = new ShotDemand(); // shots fired per hour by each town's hunters (what a Merchant produces for)
 	private volatile double _stockHalfLifeHours = 6.0; // unsold town stock: half of it is cleared (paid at the vendor price) in this long
 	private volatile long _lastStockSweep; // when the town stock last cleared, 0 until the first tick
 	private volatile boolean _stockSaving; // false when the saved stock could not be read, so a save never overwrites it
@@ -256,6 +257,34 @@ public class LivingPopulationManager
 	}
 
 	/** @return whether this bot fires blessed spiritshots: a fixed share of the mages by bot id (a stand-in until a bot's purchases decide it) */
+	/**
+	 * Adds what a bot fired in a span of hunting to its town's shot demand: the shots it had and the shots it needed, of
+	 * the kind its weapon grade and class fire. Nothing before the bot uses shots at all (the newbie reward).
+	 */
+	private void recordShotDemand(ColdBot bot, ZoneCombat combat, ColdEconomy.State before, ColdEconomy.State after, ColdEconomy.Params params, long huntedMs, long now)
+	{
+		if ((huntedMs <= 0) || (bot.getTown() == null) || !after.rewardClaimed())
+		{
+			return;
+		}
+		final long wanted = Math.round(Math.max(0.0, params.killsPerMinute() * params.soulshotsPerKill() * (huntedMs / 60_000.0)));
+		if (wanted <= 0)
+		{
+			return;
+		}
+		// The newbie reward lands before the span's shots are fired, so a bot that just claimed it fires from that stock.
+		final long available = before.soulshots() + (before.rewardClaimed() ? 0L : params.soulshotMilestoneGrant());
+		final int weaponGrade = ColdLife.gradesOf(bot, _gear, combat.tierStep())[0];
+		final int shot = LivingSupplies.shotIdForGrade(bot.getClassId(), weaponGrade, usesBlessed(bot));
+		_shotDemand.record(bot.getTown(), shot, Math.min(wanted, available), wanted, now);
+	}
+
+	/** @return what each town's hunters fire per hour, for the Merchant's production decisions */
+	public ShotDemand shotDemand()
+	{
+		return _shotDemand;
+	}
+
 	private boolean usesBlessed(ColdBot bot)
 	{
 		return (_blessedShare > 0.0) && (Math.floorMod(bot.getId() * 2654435761L, 100L) < Math.round(_blessedShare * 100.0));
@@ -803,6 +832,7 @@ public class LivingPopulationManager
 				final ColdEconomy.Params shotParams = economyParams.withSoulshotsPerKill(shotsPerKillOf(combat, bot, progress.level(), economyParams));
 				final ColdEconomy.Params botEconomy = combat.enabled() ? shotParams.withKillsPerMinute(botKillsPerMinute) : shotParams;
 				final ColdEconomy.State after = ColdEconomy.accrue(before, progress.level(), huntedMs, botEconomy, (yield == null) ? -1.0 : (yield.adena() * lootScale), events);
+				recordShotDemand(bot, combat, before, after, botEconomy, huntedMs, now);
 				huntAdena = Math.max(0L, after.adena() - before.adena());
 				if ((yield != null) && (huntedMs > 0))
 				{

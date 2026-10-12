@@ -32,6 +32,7 @@ import org.l2jmobius.gameserver.livingpop.ColdLife;
 import org.l2jmobius.gameserver.livingpop.ColdRisk;
 import org.l2jmobius.gameserver.livingpop.DecisionLog;
 import org.l2jmobius.gameserver.livingpop.DropYield;
+import org.l2jmobius.gameserver.livingpop.ShotDemand;
 import org.l2jmobius.gameserver.livingpop.TownStock;
 import org.l2jmobius.gameserver.livingpop.GoalPlanner;
 import org.l2jmobius.gameserver.livingpop.LivingChat;
@@ -84,6 +85,7 @@ public class LivingTravelTest
 		testStarterZone();
 		testDropYield();
 		testTownStock();
+		testShotDemand();
 		testLootSale();
 		testColdRisk();
 		testColdDeathAndRest();
@@ -496,6 +498,30 @@ public class LivingTravelTest
 	private static boolean near(double value, double expected)
 	{
 		return Math.abs(value - expected) < 1e-6;
+	}
+
+	private static final long HOUR = 3_600_000L;
+
+	private static void testShotDemand()
+	{
+		final ShotDemand demand = new ShotDemand();
+		// Giran's hunters: 600 shots fired in the first hour, then 900 fired of 1500 wanted in the second.
+		demand.record("Giran", 1463, 600, 600, 0L);
+		demand.record("Giran", 1463, 900, 1500, HOUR + (HOUR / 2));
+		demand.record("Giran", 1464, 100, 100, HOUR + 10L);
+		demand.record("Aden", 1463, 50, 50, HOUR + 10L);
+		final ShotDemand.Rate full = demand.perHour("Giran", 1463, 2, 2 * HOUR - 1L);
+		check("shots fired per hour over a window", (Math.abs(full.fired() - 750.0) < 1e-3) && (Math.abs(full.wanted() - 1050.0) < 1e-3));
+		check("shots wanted but missed are the difference", Math.abs(full.missed() - 300.0) < 1e-3);
+		check("the most recent hour alone", Math.abs(demand.perHour("Giran", 1463, 1, 2 * HOUR - 1L).fired() - 900.0) < 1e-3);
+		check("a town and an item are kept apart", (Math.abs(demand.perHour("Aden", 1463, 2, 2 * HOUR - 1L).fired() - 25.0) < 1e-3) && (demand.perHour("Aden", 1464, 2, 2 * HOUR - 1L).wanted() == 0.0));
+		check("a town lists the shots its hunters use", (demand.town("Giran", 2, 2 * HOUR - 1L).keySet().equals(java.util.Set.of(1463, 1464))) && demand.towns().equals(List.of("Aden", "Giran")));
+		final ShotDemand young = new ShotDemand();
+		young.record("Dion", 1463, 300, 300, 0L);
+		check("a younger tracker averages over the time it has run", Math.abs(young.perHour("Dion", 1463, 24, HOUR / 2).fired() - 600.0) < 1e-9);
+		demand.record("Giran", 1463, 5, 3, 3 * HOUR);
+		check("fired never counts above wanted", demand.perHour("Giran", 1463, 1, 3 * HOUR).fired() <= demand.perHour("Giran", 1463, 1, 3 * HOUR).wanted());
+		check("no town means nothing is recorded", new ShotDemand().towns().isEmpty());
 	}
 
 	private static void testTownStock()
