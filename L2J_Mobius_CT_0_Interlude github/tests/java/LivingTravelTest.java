@@ -804,6 +804,13 @@ public class LivingTravelTest
 		check("the most recent hour alone", Math.abs(demand.perHour("Giran", 1463, 1, 2 * HOUR - 1L).fired() - 900.0) < 1e-3);
 		check("a town and an item are kept apart", (Math.abs(demand.perHour("Aden", 1463, 2, 2 * HOUR - 1L).fired() - 25.0) < 1e-3) && (demand.perHour("Aden", 1464, 2, 2 * HOUR - 1L).wanted() == 0.0));
 		check("a town lists the shots its hunters use", (demand.town("Giran", 2, 2 * HOUR - 1L).keySet().equals(java.util.Set.of(1463, 1464))) && demand.towns().equals(List.of("Aden", "Giran")));
+		// A restart: saved after 2 hours, back 5 hours later; the downtime is cut out so the rate holds.
+		final ShotDemand restored = new ShotDemand();
+		final int read = restored.decode(demand.encode(2 * HOUR - 1L), 7 * HOUR - 1L);
+		check("a saved demand reads back", read == 4);
+		final ShotDemand.Rate again = restored.perHour("Giran", 1463, 2, 7 * HOUR - 1L);
+		check("downtime does not sag the rate", (Math.abs(again.fired() - 750.0) < 1e-3) && (Math.abs(again.wanted() - 1050.0) < 1e-3));
+		check("garbage decodes to nothing", (new ShotDemand().decode("junk", 0L) == 0) && (new ShotDemand().decode(null, 0L) == 0));
 		final ShotDemand young = new ShotDemand();
 		young.record("Dion", 1463, 300, 300, 0L);
 		check("a younger tracker averages over the time it has run", Math.abs(young.perHour("Dion", 1463, 24, HOUR / 2).fired() - 600.0) < 1e-9);

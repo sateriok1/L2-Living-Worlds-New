@@ -665,6 +665,7 @@ public class LivingPopulationManager
 		}
 
 		_stockSaving = _townStockDao.load(_townStock);
+		loadShotDemand();
 		_handoff.setTownStock(_townStock);
 		_lastStockSweep = System.currentTimeMillis(); // downtime does not clear stock
 		FakePlayerStoreFactory.setSupply(new TownShops(_townStock, () -> (_catalog == null) ? List.of() : _catalog.towns(), this::payOwner, this::shotFloor));
@@ -773,6 +774,7 @@ public class LivingPopulationManager
 		{
 			_townStockDao.save(_townStock);
 		}
+		saveShotDemand();
 		// Clear in-memory state so a later start() reloads cleanly instead of double-loading the population.
 		_bots.clear();
 		_removals.clear();
@@ -1878,6 +1880,7 @@ public class LivingPopulationManager
 			sweepTownStock();
 			syncShopkeepers();
 			saveTownStock();
+			saveShotDemand();
 		}
 		catch (Exception e)
 		{
@@ -1920,6 +1923,46 @@ public class LivingPopulationManager
 		{
 			final ItemTemplate item = ItemData.getInstance().getTemplate(gone.itemId());
 			payOwner(gone.owner(), gone.count() * ((item == null) ? 0L : Math.max(0L, item.getReferencePrice() / 2L)));
+		}
+	}
+
+	/** @return the file that keeps the shot demand across restarts, next to the snapshot */
+	private Path shotDemandFile()
+	{
+		return Path.of(_config.snapshotFile()).resolveSibling("LivingPopulation-shotdemand.txt");
+	}
+
+	private void loadShotDemand()
+	{
+		try
+		{
+			final Path file = shotDemandFile();
+			if (Files.exists(file))
+			{
+				final int read = _shotDemand.decode(Files.readString(file, StandardCharsets.UTF_8), System.currentTimeMillis());
+				LOGGER.info("LivingPopulation: restored " + read + " shot demand buckets.");
+			}
+		}
+		catch (Exception e)
+		{
+			LOGGER.log(Level.WARNING, "LivingPopulation: could not read the shot demand file: " + e.getMessage(), e);
+		}
+	}
+
+	private void saveShotDemand()
+	{
+		try
+		{
+			final Path file = shotDemandFile();
+			if (file.getParent() != null)
+			{
+				Files.createDirectories(file.getParent());
+			}
+			Files.write(file, _shotDemand.encode(System.currentTimeMillis()).getBytes(StandardCharsets.UTF_8));
+		}
+		catch (Exception e)
+		{
+			LOGGER.log(Level.WARNING, "LivingPopulation: could not save the shot demand: " + e.getMessage(), e);
 		}
 	}
 

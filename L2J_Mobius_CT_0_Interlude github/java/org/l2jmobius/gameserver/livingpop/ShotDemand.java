@@ -28,8 +28,8 @@ import java.util.TreeMap;
  * What the hunters of each town fire, so a Merchant can size its production. A town records, for every shot item, how
  * many shots its hunters fired and how many more they would have fired had they had them (a bot with an empty stock keeps
  * hunting without shots), in hourly buckets. The rates are averages over the last few hours. Pure (no game types), so the
- * standalone test lane covers it. Kept in memory: it starts empty after a restart and is read as rates once an hour has
- * passed, never as totals.
+ * standalone test lane covers it. Read as rates, never as totals. {@link #encode} and {@link #decode} keep it across a restart, with the
+ * downtime left out so the rates do not sag while the server was off.
  */
 public final class ShotDemand
 {
@@ -166,5 +166,84 @@ public final class ShotDemand
 		}
 		towns.sort(null);
 		return towns;
+	}
+
+	/**
+	 * @param nowMs now, stored so a later {@link #decode} can leave the downtime out
+	 * @return the recorded buckets as text: a header line, then one {@code town|item|hour|fired|wanted} line per bucket
+	 */
+	public synchronized String encode(long nowMs)
+	{
+		final StringBuilder sb = new StringBuilder();
+		sb.append(_since == Long.MAX_VALUE ? -1L : _since).append(';').append(nowMs).append('\n');
+		for (Map.Entry<Key, TreeMap<Long, long[]>> entry : _buckets.entrySet())
+		{
+			for (Map.Entry<Long, long[]> bucket : entry.getValue().entrySet())
+			{
+				sb.append(entry.getKey().town()).append('|').append(entry.getKey().itemId()).append('|').append(bucket.getKey()).append('|').append(bucket.getValue()[0]).append('|').append(bucket.getValue()[1]).append('\n');
+			}
+		}
+		return sb.toString();
+	}
+
+	/**
+	 * Replaces what is recorded with text from {@link #encode}. Whole hours of downtime are cut out of the history. Lines that cannot be read are skipped.
+	 * @param text the text
+	 * @param nowMs now
+	 * @return how many buckets were read
+	 */
+	public synchronized int decode(String text, long nowMs)
+	{
+		_buckets.clear();
+		_since = Long.MAX_VALUE;
+		if ((text == null) || text.isBlank())
+		{
+			return 0;
+		}
+		final String[] lines = text.split("\n");
+		long shiftHours = 0L;
+		long shiftMs = 0L;
+		try
+		{
+			final String[] head = lines[0].trim().split(";");
+			final long since = Long.parseLong(head[0]);
+			final long savedAt = Long.parseLong(head[1]);
+			final long down = Math.max(0L, nowMs - savedAt);
+			shiftHours = down / HOUR_MS;
+			shiftMs = shiftHours * HOUR_MS;
+			if (since >= 0)
+			{
+				_since = Math.min(nowMs, since + shiftMs);
+			}
+		}
+		catch (RuntimeException e)
+		{
+			return 0;
+		}
+		int read = 0;
+		for (int i = 1; i < lines.length; i++)
+		{
+			try
+			{
+				final String[] part = lines[i].trim().split("\\|");
+				final long fired = Long.parseLong(part[3]);
+				final long wanted = Long.parseLong(part[4]);
+				if ((part.length != 5) || (wanted <= 0))
+				{
+					continue;
+				}
+				_buckets.computeIfAbsent(new Key(part[0], Integer.parseInt(part[1])), key -> new TreeMap<>()).put(Long.parseLong(part[2]) + shiftHours, new long[]
+				{
+					fired,
+					wanted
+				});
+				read++;
+			}
+			catch (RuntimeException e)
+			{
+				// skip the line
+			}
+		}
+		return read;
 	}
 }
