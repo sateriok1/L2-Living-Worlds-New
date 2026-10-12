@@ -229,12 +229,15 @@ public final class RaidDirector
 			}
 			synchronized (bot)
 			{
+				final List<DecisionLog.Event> joined = new ArrayList<>();
+				ColdLife.prepareForRaid(bot, life, joined); // consumables first, quickly: the fight uses them
 				ColdLife.moveTo(bot, boss.at());
 				bot.setZone(null);
 				bot.setTown(null);
 				bot.setActivity(ColdLife.RAIDING);
 				bot.setLeg(TravelLeg.stay(boss.at(), now, Math.max(1L, endAt - now)));
-				bot.getDecisions().addTick(now, new ArrayList<>(List.of(new DecisionLog.Event(null, "Joined a raid party of " + team.members().size() + " for " + boss.name() + " (level " + boss.level() + "). Win chance " + Math.round(team.winChance() * 100.0) + "%"))));
+				joined.add(new DecisionLog.Event(null, "Joined a raid party of " + team.members().size() + " for " + boss.name() + " (level " + boss.level() + "). Win chance " + Math.round(team.winChance() * 100.0) + "%"));
+				bot.getDecisions().addTick(now, joined);
 			}
 			members.add(bot);
 			taken.add(bot.getId());

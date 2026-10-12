@@ -823,6 +823,41 @@ public final class ColdLife
 	/**
 	 * A raid party wiped and tries again: the bot dies and loses experience as for any death, but stays with the party (it runs back to the boss).
 	 */
+	/**
+	 * A bot picked for a raid stops at the nearest grocer first and stocks up on what the fight uses: it sells its loot, then
+	 * buys potions, soulshots and scrolls up to its usual stock with what it can spend. It buys no gear (that waits for its
+	 * next town visit) and no D or better shots (those come only from the Merchant's shops).
+	 * @param bot the bot
+	 * @param context the world
+	 * @param events receives what it did
+	 */
+	public static void prepareForRaid(ColdBot bot, Context context, List<DecisionLog.Event> events)
+	{
+		final Town town = context.catalog().nearestShoppingTown(point(bot));
+		if ((town == null) || !town.hasGrocer())
+		{
+			return;
+		}
+		if (bot.getLoot() > 0)
+		{
+			bot.setAdena(Math.min(ColdEconomy.MAX_ADENA, bot.getAdena() + bot.getLoot()));
+			bot.setLoot(0L);
+		}
+		final SupplyPlanner.Prices listed = context.priceBook().prices(bot.getLevel(), bot.getGearTier(), bot.getClassId());
+		final SupplyPlanner.Prices prices = new SupplyPlanner.Prices(listed.potion(), buysShotsInShops(bot, context) ? NO_GROCER_SHOTS : listed.soulshot(), listed.escape(), NO_GROCER_SHOTS);
+		final SupplyPlanner.Params supply = supplyFor(bot, context);
+		final SupplyPlanner.Purchase bought = SupplyPlanner.shop(bot.getLevel(), bot.getAdena(), bot.getEscapes(), bot.getPotions(), bot.getSoulshots(), bot.getGearTier(), bot.isRewardClaimed(), prices, supply);
+		if (!bought.any())
+		{
+			return;
+		}
+		bot.setAdena(Math.max(0L, bot.getAdena() - bought.cost()));
+		bot.setEscapes(bot.getEscapes() + bought.escapes());
+		bot.setPotions(bot.getPotions() + bought.potions());
+		bot.setSoulshots(bot.getSoulshots() + bought.soulshots());
+		events.add(new DecisionLog.Event(null, "Stopped at the grocer in " + town.name() + " to stock up for the raid: " + describe(bought, bot.getGearTier(), LivingSupplies.isMystic(bot.getClassId())) + " for " + DecisionLog.num(bought.cost()) + " adena"));
+	}
+
 	static void wipedInRaid(ColdBot bot, String bossName, Context context, List<DecisionLog.Event> events)
 	{
 		final long lost = Math.min(bot.getExpIntoLevel(), Math.round(context.expToNext().applyAsLong(bot.getLevel()) * (ColdRisk.expLossPercent(bot.getLevel()) / 100.0)));
