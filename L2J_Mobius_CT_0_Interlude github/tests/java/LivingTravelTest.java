@@ -816,6 +816,18 @@ public class LivingTravelTest
 		final RaidPlanner.Team weak = RaidPlanner.fight(boss, List.of(pool.get(0), pool.get(1)), params);
 		check("two bots cannot kill it in time", weak.winChance() < 0.5);
 		check("buffers raise the damage and shorten the fight", RaidPlanner.fight(boss, pool, params).killSeconds() < RaidPlanner.fight(boss, noBuffer(pool), params).killSeconds());
+		// The boss's side: minions and skills add damage on the tank, area skills hit everybody.
+		final RaidPlanner.Team base = RaidPlanner.fight(boss, team.members(), params);
+		final RaidPlanner.Team withMinions = RaidPlanner.fight(new RaidPlanner.Boss(25202, 400_000.0, 2400.0, 0.5, List.of(new RaidPlanner.Strike(1500.0, 4.0, false))), team.members(), params);
+		check("minions and skills on the tank shorten how long it lasts", (withMinions.ratio() < base.ratio()) && (withMinions.winChance() < base.winChance()));
+		final RaidPlanner.Team withArea = RaidPlanner.fight(new RaidPlanner.Boss(25202, 400_000.0, 2400.0, 0.5, List.of(new RaidPlanner.Strike(1500.0, 4.0, true))), team.members(), params);
+		check("area skills hurt more than the same skill on the tank alone", withArea.ratio() < RaidPlanner.fight(new RaidPlanner.Boss(25202, 400_000.0, 2400.0, 0.5, List.of(new RaidPlanner.Strike(1500.0, 4.0, false))), team.members(), params).ratio());
+		final RaidPlanner.Team minionsDie = RaidPlanner.fight(new RaidPlanner.Boss(25202, 400_000.0, 2400.0, 0.5, List.of(new RaidPlanner.Strike(1500.0, 4.0, false, 20_000.0))), team.members(), params);
+		check("minions that die hit only until they are dead, so they hurt less than a skill of the same power", minionsDie.ratio() > withMinions.ratio());
+		check("their HP is part of the work", minionsDie.killSeconds() > base.killSeconds());
+		check("a boss whose area skills outrun the healing wipes the team", RaidPlanner.fight(new RaidPlanner.Boss(25202, 400_000.0, 2400.0, 0.5, List.of(new RaidPlanner.Strike(60_000.0, 1.0, true))), team.members(), params).winChance() == 0.0);
+		check("a boss with strikes can leave the pool short of a team", RaidPlanner.assemble(new RaidPlanner.Boss(25202, 400_000.0, 2400.0, 0.5, List.of(new RaidPlanner.Strike(60_000.0, 1.0, true))), pool, params) == null);
+		check("a lower win chance lets the same pool go for it", RaidPlanner.assemble(new RaidPlanner.Boss(25202, 400_000.0, 2400.0, 0.5, List.of(new RaidPlanner.Strike(1500.0, 4.0, false))), pool, new RaidPlanner.Params(params.minSize(), params.maxSize(), 0.0, params.hitScale(), params.burst(), params.buffCap(), params.healSeconds(), params.maxFightSeconds(), params.skillSeconds())) != null);
 		// Loot: the groups roll, and the items are shared evenly.
 		final java.util.Random random = new java.util.Random(7);
 		final List<RaidLoot.Group> groups = List.of(new RaidLoot.Group(100.0, List.of(new RaidLoot.Entry(57, 100.0, 1000L, 1000L))), new RaidLoot.Group(100.0, List.of(new RaidLoot.Entry(81, 50.0, 1L, 1L), new RaidLoot.Entry(2500, 50.0, 1L, 1L))), new RaidLoot.Group(0.0, List.of(new RaidLoot.Entry(151, 100.0, 1L, 1L))));

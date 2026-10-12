@@ -2010,7 +2010,7 @@ public class LivingPopulationManager
 		}
 		_raidBossesLoaded = true;
 		final List<RaidDirector.BossInfo> bosses = new ArrayList<>();
-		for (NpcTemplate template : NpcData.getInstance().getTemplates(t -> t.isType("RaidBoss") && (t.getLevel() >= config.minLevel()) && (t.getLevel() <= config.maxLevel())))
+		for (NpcTemplate template : NpcData.getInstance().getTemplates(t -> t.isType("RaidBoss") && (t.getLevel() >= config.minLevel()) && (t.getLevel() <= config.maxLevel()) && !config.excluded().contains(t.getId())))
 		{
 			final org.l2jmobius.gameserver.model.spawns.Spawn spawn = spawns.get(template.getId());
 			if (spawn == null)
@@ -2039,10 +2039,40 @@ public class LivingPopulationManager
 			}
 			final long minMs = spawn.getRespawnMinDelay();
 			final long maxMs = spawn.getRespawnMaxDelay();
-			bosses.add(new RaidDirector.BossInfo(template.getId(), template.getName(), template.getLevel(), template.getBaseHpMax(), template.getBasePDef(), template.getBaseMDef(), template.getBasePAtk(), template.getBaseMAtk(), template.getBasePAtkSpd(), new ZoneCatalog.Point(spawn.getX(), spawn.getY(), spawn.getZ()), (minMs + maxMs) / 2, Math.max(0L, (maxMs - minMs) / 2), groups, template.getExp(), template.getSP()));
+			bosses.add(new RaidDirector.BossInfo(template.getId(), template.getName(), template.getLevel(), template.getBaseHpMax(), template.getBasePDef(), template.getBaseMDef(), template.getBasePAtk(), template.getBaseMAtk(), template.getBasePAtkSpd(), new ZoneCatalog.Point(spawn.getX(), spawn.getY(), spawn.getZ()), (minMs + maxMs) / 2, Math.max(0L, (maxMs - minMs) / 2), groups, template.getExp(), template.getSP(), raidStrikes(template, config.planner().skillSeconds())));
 		}
 		_raids.setBosses(bosses);
 		LOGGER.info("LivingPopulation: " + bosses.size() + " raid bosses of level " + config.minLevel() + " to " + config.maxLevel() + " are open to cold raid parties.");
+	}
+
+	/**
+	 * What hits the party besides the boss's plain attacks: its minions' hits and its damage skills, in attack power (see {@link RaidPlanner.Strike}).
+	 * A minion group counts every minion at its own P.Atk and attack speed; a skill is used once every {@code skillSeconds} (or its reuse, if longer);
+	 * a physical skill adds its power to the boss's P.Atk and a magic one is turned to the same scale with the magic damage formula (91 x sqrt(M.Atk) x power against 70 x P.Atk).
+	 * The minions are taken to be held by the tank and killed first (their HP is part of the work); their own skills are not modeled.
+	 */
+	private static List<RaidPlanner.Strike> raidStrikes(NpcTemplate template, double skillSeconds)
+	{
+		final List<RaidPlanner.Strike> strikes = new ArrayList<>();
+		for (org.l2jmobius.gameserver.model.actor.holders.npc.MinionHolder minion : template.getParameters().getMinionList("Privates"))
+		{
+			final NpcTemplate minionTemplate = NpcData.getInstance().getTemplate(minion.getId());
+			if ((minionTemplate != null) && (minion.getCount() > 0))
+			{
+				strikes.add(new RaidPlanner.Strike(minionTemplate.getBasePAtk(), minion.getCount() * Math.max(0.1, minionTemplate.getBasePAtkSpd() / 500.0), false, minion.getCount() * minionTemplate.getBaseHpMax()));
+			}
+		}
+		for (org.l2jmobius.gameserver.model.skill.Skill skill : template.getSkills().values())
+		{
+			if (skill.isPassive() || !skill.isDamage() || (skill.getPower() <= 0.0))
+			{
+				continue;
+			}
+			final double interval = Math.max(Math.max(1.0, skillSeconds), (skill.getReuseDelay() + skill.getHitTime()) / 1000.0);
+			final double power = skill.isMagic() ? ((91.0 / 70.0) * Math.sqrt(Math.max(1.0, template.getBaseMAtk())) * skill.getPower()) : (template.getBasePAtk() + skill.getPower());
+			strikes.add(new RaidPlanner.Strike(power, 1.0 / interval, skill.isAOE()));
+		}
+		return strikes;
 	}
 
 	/** How close a player may be to a raid boss before cold parties leave it alone (game units). */
@@ -2105,6 +2135,7 @@ public class LivingPopulationManager
 			if ((npc != null) && !npc.isDead())
 			{
 				// A command kill with no attacker: no drops fall in the world (the party's loot is in the town stock) and the boss manager starts its respawn.
+				// NEEDS A LIVE TEST: that doDie(null) gives no rewards and starts the respawn timer has been read from the code but never run (see MODULE.md, "Needs a live test").
 				ThreadPool.execute(() -> npc.doDie(null));
 			}
 		}
@@ -2120,6 +2151,49 @@ public class LivingPopulationManager
 		public void stock(String town, long botId, int itemId, long count)
 		{
 			_townStock.add(town, botId, itemId, count);
+		}
+
+		@Override
+		public void supplies(ColdBot bot, double fightSeconds, List<DecisionLog.Event> events)
+		{
+			// Shots as in hunting (none before the newbie reward), recorded as demand of the shop the bot buys them in; potions at the bot's hunting rate.
+			long fired = 0L;
+			if (bot.isRewardClaimed())
+			{
+				final long wanted = Math.round(_model.raidShots(bot.getClassId(), bot.getLevel(), fightSeconds));
+				fired = Math.min(wanted, Math.max(0L, bot.getSoulshots()));
+				if (wanted > 0L)
+				{
+					bot.setSoulshots(Math.max(0L, bot.getSoulshots() - fired));
+					final int shot = shotOf(bot, _model.tierStep());
+					final ShotCrafting.Recipe recipe = ShotCrafting.byShot(shot);
+					if (recipe != null)
+					{
+						_shotDemand.record(recipe.saleTown(), shot, fired, wanted, System.currentTimeMillis());
+					}
+				}
+			}
+			final double expected = (fightSeconds / 3600.0) * _travelConfig.potionsPerHour() * LivingSupplies.potionUseFactor(bot.getClassId());
+			long drunk = (long) Math.floor(expected);
+			if (_random.nextDouble() < (expected - drunk))
+			{
+				drunk++;
+			}
+			drunk = Math.min(drunk, Math.max(0L, bot.getPotions()));
+			if (drunk > 0L)
+			{
+				bot.setPotions(bot.getPotions() - drunk);
+			}
+			if ((fired > 0L) || (drunk > 0L))
+			{
+				events.add(new DecisionLog.Event(null, "Used " + DecisionLog.num(fired) + " shots and " + DecisionLog.num(drunk) + " potions in the fight"));
+			}
+		}
+
+		@Override
+		public void save(ColdBot bot)
+		{
+			_dao.update(bot);
 		}
 
 		@Override

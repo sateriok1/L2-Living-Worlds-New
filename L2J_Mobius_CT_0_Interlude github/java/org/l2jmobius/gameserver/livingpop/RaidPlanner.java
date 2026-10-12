@@ -37,14 +37,38 @@ public final class RaidPlanner
 	}
 
 	/**
+	 * One kind of attack the boss's side makes besides the boss's own plain hits: a minion's hits, or a boss skill. Its damage is
+	 * given as attack power in P.Atk terms (the number the plain hit formula divides by P.Def), so every attack is worked out the same way.
+	 * @param power the attack power of one use (a minion's P.Atk; for a boss skill, P.Atk plus the skill's power, or the magic formula's equivalent)
+	 * @param perSecond how many uses a second (a minion group counts all its minions)
+	 * @param area true when every member is hit, false when it falls on the tank
+	 * @param hp 0 for a skill, which the boss keeps using the whole fight; above 0 for minions, the HP of the group: the party kills them first
+	 *            (it is added to the damage the party has to do) and the group only hits the tank until it is dead
+	 */
+	public record Strike(double power, double perSecond, boolean area, double hp)
+	{
+		/** A skill: used the whole fight. */
+		public Strike(double power, double perSecond, boolean area)
+		{
+			this(power, perSecond, area, 0.0);
+		}
+	}
+
+	/**
 	 * A raid boss as the fight sees it.
 	 * @param id the npc id
 	 * @param hp its HP
 	 * @param pAtk its physical attack
 	 * @param hitsPerSecond its attacks a second
+	 * @param strikes its minions' hits and its damage skills (see {@link Strike})
 	 */
-	public record Boss(int id, double hp, double pAtk, double hitsPerSecond)
+	public record Boss(int id, double hp, double pAtk, double hitsPerSecond, List<Strike> strikes)
 	{
+		/** A boss with plain hits only. */
+		public Boss(int id, double hp, double pAtk, double hitsPerSecond)
+		{
+			this(id, hp, pAtk, hitsPerSecond, List.of());
+		}
 	}
 
 	/**
@@ -78,16 +102,17 @@ public final class RaidPlanner
 	 * @param maxSize the largest
 	 * @param minWinChance the win chance a team needs before it goes
 	 * @param hitScale the damage formula's constant (70 x P.Atk over P.Def)
-	 * @param burst how much harder the boss hits than its plain attacks (skills)
+	 * @param burst a multiple on all the damage the party takes (1 = as modeled; the boss's skills and minions are in the model already)
 	 * @param buffCap the most the team's buffers can multiply the damage
 	 * @param healSeconds how long a healer can heal at full strength before its mana is spent, after which it heals a quarter as much
 	 * @param maxFightSeconds the longest fight the team keeps up (the boss's skills and the party's mana give out)
+	 * @param skillSeconds the seconds between two uses of one boss skill (at least; a skill with a longer reuse waits that long)
 	 */
-	public record Params(int minSize, int maxSize, double minWinChance, double hitScale, double burst, double buffCap, double healSeconds, double maxFightSeconds)
+	public record Params(int minSize, int maxSize, double minWinChance, double hitScale, double burst, double buffCap, double healSeconds, double maxFightSeconds, double skillSeconds)
 	{
 		public static Params defaults()
 		{
-			return new Params(6, 9, 0.8, 70.0, 1.5, 1.8, 240.0, 1800.0);
+			return new Params(6, 9, 0.8, 70.0, 1.0, 1.8, 240.0, 1800.0, 15.0);
 		}
 	}
 
@@ -105,7 +130,7 @@ public final class RaidPlanner
 	public static Team fight(Boss boss, List<Member> team, Params params)
 	{
 		Member tank = null;
-		double heal = 0.0;
+		double healing = 0.0;
 		double buff = 1.0;
 		double dps = 0.0;
 		for (Member member : team)
@@ -120,7 +145,7 @@ public final class RaidPlanner
 			}
 			else if (member.seat() == Seat.HEALER)
 			{
-				heal += member.healPerSecond();
+				healing += member.healPerSecond();
 			}
 			else if (member.seat() == Seat.BUFFER)
 			{
@@ -131,11 +156,63 @@ public final class RaidPlanner
 		{
 			return new Team(List.copyOf(team), Double.POSITIVE_INFINITY, 0.0, 0.0);
 		}
-		final double kill = boss.hp() / (dps * Math.min(params.buffCap(), buff));
-		final double incoming = boss.hitsPerSecond() * params.hitScale() * boss.pAtk() / Math.max(1.0, tank.pDef()) * params.burst();
+		final double partyDamage = dps * Math.min(params.buffCap(), buff);
+		// What hits the party, in attack power a second: the tank takes the boss's plain hits and its single-target skills, and every member
+		// takes the area skills. Minions are held by the tank and killed first: their HP adds to the work, and they hit only until they are dead
+		// (on average half of that time, as they fall one by one). Skill effects (holds, stuns) and the minions' skills are not modeled.
+		double tankPower = boss.hitsPerSecond() * boss.pAtk();
+		double areaPower = 0.0;
+		double minionPower = 0.0;
+		double minionHp = 0.0;
+		for (Strike strike : boss.strikes())
+		{
+			if (strike.hp() > 0.0)
+			{
+				minionPower += strike.power() * strike.perSecond();
+				minionHp += strike.hp();
+			}
+			else if (strike.area())
+			{
+				areaPower += strike.power() * strike.perSecond();
+			}
+			else
+			{
+				tankPower += strike.power() * strike.perSecond();
+			}
+		}
+		final double kill = (boss.hp() + minionHp) / partyDamage;
+		final double clear = minionHp / partyDamage;
+		final double scale = params.hitScale() * params.burst();
+		final double tankLoad = scale * (tankPower + areaPower) / Math.max(1.0, tank.pDef());
+		final double minionLoad = 0.5 * scale * minionPower / Math.max(1.0, tank.pDef());
+		double othersLoad = 0.0;
+		double othersHp = 0.0;
+		for (Member member : team)
+		{
+			if (member != tank)
+			{
+				othersLoad += scale * areaPower / Math.max(1.0, member.pDef());
+				othersHp += member.hp();
+			}
+		}
 		final double full = Math.min(1.0, params.healSeconds() / kill);
-		final double net = Math.max(0.0, incoming - (heal * (full + (0.25 * (1.0 - full)))));
-		final double lasts = (net <= 0.0) ? Double.POSITIVE_INFINITY : (tank.hp() / net);
+		final double heal = healing * (full + (0.25 * (1.0 - full)));
+		// The healers heal the tank first, then whoever else the area skills hurt (a perfect healer: optimistic).
+		final double tankNet = Math.max(0.0, tankLoad - heal);
+		final double tankNetEarly = Math.max(0.0, tankLoad + minionLoad - heal); // while the minions are up
+		final double othersNet = Math.max(0.0, othersLoad - Math.max(0.0, heal - tankLoad));
+		final double tankLasts;
+		if (tankNetEarly * clear >= tank.hp())
+		{
+			tankLasts = tank.hp() / tankNetEarly;
+		}
+		else
+		{
+			final double left = tank.hp() - (tankNetEarly * clear);
+			tankLasts = (tankNet <= 0.0) ? Double.POSITIVE_INFINITY : (clear + (left / tankNet));
+		}
+		final double othersLast = (othersNet <= 0.0) ? Double.POSITIVE_INFINITY : (othersHp / othersNet);
+		final double lasts = Math.min(tankLasts, othersLast);
 		final double ratio = lasts / kill;
 		final double win = (kill > params.maxFightSeconds()) ? 0.0 : Double.isInfinite(ratio) ? 1.0 : Math.max(0.0, Math.min(1.0, (ratio - 0.6) / 0.8));
 		return new Team(List.copyOf(team), kill, ratio, win);

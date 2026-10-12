@@ -650,6 +650,24 @@ public final class ZoneCombat
 		return rotationDps(boss, role, classId, level, stats.attack(), skillFraction, self, ROTATION_WINDOWS.length - 1) * shotDamage(role, shotFraction, blessed);
 	}
 
+	/**
+	 * Shots a member fires in a raid fight: the same rule as a hunting kill (one volley per attack, the grade's shots each), over the fight's length.
+	 * @param fightSeconds how long the member fights
+	 * @return shots fired, 0 when the model is off
+	 */
+	public double raidShots(int classId, int level, double fightSeconds)
+	{
+		if (!_params.enabled() || (fightSeconds <= 0.0))
+		{
+			return 0.0;
+		}
+		final Role role = roleOf(classId);
+		final boolean mage = role == Role.MAGE;
+		final double interval = mage ? _hitInterval[2] : (role == Role.BOW) ? _hitInterval[1] : _hitInterval[0];
+		final double[] table = mage ? SHOTS_MAGE : (role == Role.BOW) ? SHOTS_BOW : SHOTS_MELEE;
+		return Math.max(1.0, Math.ceil(fightSeconds / interval)) * table[LivingSupplies.gradeFor(level)];
+	}
+
 	/** @return the damage multiple a buffer class gives a melee party at the level (1 for a class that is not a buffer) */
 	public double raidBuff(int classId, int level)
 	{

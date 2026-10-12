@@ -172,7 +172,7 @@ public class LivingPopulationModule implements GameModule
 			: null);
 		LivingPopulationManager.getInstance().setRaids(context.config().getBoolean("RaidParties", true)
 			? new RaidDirector.Config(Math.max(1, context.config().getInt("RaidMinLevel", 20)), Math.max(1, context.config().getInt("RaidMaxLevel", 40)), Math.max(0, context.config().getInt("RaidLevelsBelow", 5)), Math.max(0, context.config().getInt("RaidLevelsAbove", 10)), Math.max(1, context.config().getInt("RaidCheckMinutes", 5)) * 60_000L, Math.max(0, context.config().getInt("RaidGatherMinutes", 5)) * 60_000L, Math.max(1, context.config().getInt("RaidRetryMinutes", 60)) * 60_000L,
-				new RaidPlanner.Params(Math.max(2, context.config().getInt("RaidMinParty", 6)), Math.max(2, context.config().getInt("RaidMaxParty", 9)), Math.max(0.0, Math.min(1.0, context.config().getDouble("RaidMinWinChance", 0.9))), 70.0, Math.max(0.1, context.config().getDouble("RaidBossBurst", 1.5)), 1.8, 240.0, 1800.0), context.config().getBoolean("RaidWorldSync", true))
+				new RaidPlanner.Params(Math.max(2, context.config().getInt("RaidMinParty", 6)), Math.max(2, context.config().getInt("RaidMaxParty", 9)), Math.max(0.0, Math.min(1.0, context.config().getDouble("RaidMinWinChance", 0.9))), 70.0, Math.max(0.1, context.config().getDouble("RaidBossBurst", 1.0)), 1.8, 240.0, Math.max(60.0, context.config().getDouble("RaidMaxFightMinutes", 30.0) * 60.0), Math.max(1.0, context.config().getDouble("RaidBossSkillSeconds", 15.0))), context.config().getBoolean("RaidWorldSync", true), idsOf(context.config().getString("RaidExcludeBosses", "")))
 			: null);
 		LivingPopulationManager.getInstance().setSelfHeal(context.config().getBoolean("SelfHeal", true));
 		LivingPopulationManager.getInstance().setStartingBuffs(context.config().getBoolean("StartingBuffs", true));
@@ -200,6 +200,23 @@ public class LivingPopulationModule implements GameModule
 	private static int freeTeleportLevel(int configured)
 	{
 		return (configured < 0) ? PlayerConfig.MAX_FREE_TELEPORT_LEVEL : configured;
+	}
+
+	private static java.util.Set<Integer> idsOf(String list)
+	{
+		final java.util.Set<Integer> ids = new java.util.HashSet<>();
+		for (String part : list.split(","))
+		{
+			try
+			{
+				ids.add(Integer.parseInt(part.trim()));
+			}
+			catch (NumberFormatException e)
+			{
+				// skip a part that is not a number (an empty list gives one empty part)
+			}
+		}
+		return ids;
 	}
 
 	private static double[] chancesOf(String list)

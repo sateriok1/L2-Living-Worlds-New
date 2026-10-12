@@ -38,13 +38,13 @@ import org.l2jmobius.gameserver.livingpop.ZoneCatalog.Town;
  */
 public final class RaidDirector
 {
-	/** Tuning, from the module settings. {@code sync}: the world's own boss is the one that is killed (see {@link Host#open}), else the director keeps a respawn clock of its own. */
-	public record Config(int minLevel, int maxLevel, int levelsBelow, int levelsAbove, long checkMs, long gatherMs, long retryMs, RaidPlanner.Params planner, boolean sync)
+	/** Tuning, from the module settings. {@code sync}: the world's own boss is the one that is killed (see {@link Host#open}), else the director keeps a respawn clock of its own. {@code excluded}: boss ids parties leave alone. */
+	public record Config(int minLevel, int maxLevel, int levelsBelow, int levelsAbove, long checkMs, long gatherMs, long retryMs, RaidPlanner.Params planner, boolean sync, Set<Integer> excluded)
 	{
 	}
 
 	/** A raid boss as the director knows it. */
-	public record BossInfo(int id, String name, int level, double hp, double pDef, double mDef, double pAtk, double mAtk, int atkSpeed, Point at, long delayMs, long randomMs, List<RaidLoot.Group> loot, double exp, double sp)
+	public record BossInfo(int id, String name, int level, double hp, double pDef, double mDef, double pAtk, double mAtk, int atkSpeed, Point at, long delayMs, long randomMs, List<RaidLoot.Group> loot, double exp, double sp, List<RaidPlanner.Strike> strikes)
 	{
 	}
 
@@ -68,6 +68,12 @@ public final class RaidDirector
 
 		/** Adds experience (and SP) to a bot, with the level-ups. */
 		void experience(ColdBot bot, long exp, long sp, List<DecisionLog.Event> events);
+
+		/** Takes what a bot used up in a fight of this many seconds (shots, potions) as it does in hunting, and records the shot demand. */
+		void supplies(ColdBot bot, double fightSeconds, List<DecisionLog.Event> events);
+
+		/** Writes the bot's row now, so a raid's result (and the bot being away) is not lost if the server stops before its next resolve. */
+		void save(ColdBot bot);
 	}
 
 	private static final double[] PARTY_EXP = { 1.0, 1.10, 1.20, 1.30, 1.40, 1.50, 2.0, 2.10, 2.20 };
@@ -187,16 +193,16 @@ public final class RaidDirector
 					byId.put(bot.getId(), bot);
 				}
 			}
-			final RaidPlanner.Team team = RaidPlanner.assemble(new RaidPlanner.Boss(boss.id(), boss.hp(), boss.pAtk(), Math.max(0.1, boss.atkSpeed() / 500.0)), candidates, _config.planner());
+			final RaidPlanner.Team team = RaidPlanner.assemble(new RaidPlanner.Boss(boss.id(), boss.hp(), boss.pAtk(), Math.max(0.1, boss.atkSpeed() / 500.0), boss.strikes()), candidates, _config.planner());
 			if (team == null)
 			{
 				continue; // the boss waits
 			}
-			start(boss, team, byId, now, life, taken);
+			start(boss, team, byId, now, life, taken, host);
 		}
 	}
 
-	private void start(BossInfo boss, RaidPlanner.Team team, Map<Long, ColdBot> byId, long now, ColdLife.Context life, Set<Long> taken)
+	private void start(BossInfo boss, RaidPlanner.Team team, Map<Long, ColdBot> byId, long now, ColdLife.Context life, Set<Long> taken, Host host)
 	{
 		final Town town = life.catalog().nearestShoppingTown(boss.at());
 		if (town == null)
@@ -226,6 +232,11 @@ public final class RaidDirector
 			taken.add(bot.getId());
 		}
 		_raids.add(new Raid(boss, members, team, endAt, town.name()));
+		for (ColdBot bot : members)
+		{
+			bot.setUpdatedAt(now);
+			host.save(bot); // saved as raiding: after a restart the bot is put back to hunting
+		}
 	}
 
 	private void finish(Raid raid, long now, ColdLife.Context life, Host host)
@@ -258,12 +269,18 @@ public final class RaidDirector
 		final double deathChance = won ? Math.max(0.03, Math.min(0.4, 0.35 * (1.6 - raid.team().ratio()))) : (gone ? 0.0 : 1.0);
 		final double expEach = won ? (boss.exp() * Math.max(0.01, org.l2jmobius.gameserver.config.RatesConfig.RATE_XP) * PARTY_EXP[Math.min(size, PARTY_EXP.length) - 1] / size) : 0.0;
 		final double spEach = won ? (boss.sp() * Math.max(0.01, org.l2jmobius.gameserver.config.RatesConfig.RATE_SP) * PARTY_EXP[Math.min(size, PARTY_EXP.length) - 1] / size) : 0.0;
+		// A party that found the boss gone never fought; one that won fought the whole modeled fight; one that wiped fought until its tank fell.
+		final double fightSeconds = gone ? 0.0 : won ? Math.min(raid.team().killSeconds(), 3600.0) : (Math.min(raid.team().killSeconds(), 3600.0) * Math.max(0.1, Math.min(1.0, raid.team().ratio())));
 		for (int i = 0; i < size; i++)
 		{
 			final ColdBot bot = raid.members().get(i);
 			synchronized (bot)
 			{
 				final List<DecisionLog.Event> events = new ArrayList<>(shared);
+				if (fightSeconds > 0.0)
+				{
+					host.supplies(bot, fightSeconds, events);
+				}
 				final Point back = (town == null) ? ColdLife.point(bot) : town.arrival();
 				bot.setEscapes(Math.max(0L, bot.getEscapes() - 1L));
 				if (town != null)
@@ -301,6 +318,8 @@ public final class RaidDirector
 					bot.setLeg(TravelLeg.stay(back, now, life.travel().escapeCastMs()));
 				}
 				bot.getDecisions().addTick(now, events);
+				bot.setUpdatedAt(now);
+				host.save(bot); // the result is on disk now, not at the bot's next resolve
 			}
 		}
 	}
