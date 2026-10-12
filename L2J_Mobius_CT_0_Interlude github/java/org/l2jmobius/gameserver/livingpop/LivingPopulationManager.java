@@ -2025,7 +2025,7 @@ public class LivingPopulationManager
 			return;
 		}
 		final ColdLife.Context life = _handoff.life();
-		final LivingPartyTravel travel = new LivingPartyTravel((life == null) ? null : life.catalog(), (life == null) ? 120.0 : life.travel().moveSpeed());
+		final LivingPartyTravel travel = new LivingPartyTravel((life == null) ? null : life.catalog(), (life == null) ? 120.0 : life.travel().moveSpeed(), (life == null) ? 0 : life.travel().freeTeleportLevel());
 		_handoff.setPartied(bot, true);
 		PhantomManager.getInstance().adoptLivingForParty(live);
 		if (!PhantomPartyManager.getInstance().joinFromTownFake(owner, live, lastSeen -> _handoff.setPartied(bot, false), travel))

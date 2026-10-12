@@ -79,15 +79,21 @@ public final class ColdLife
 	 * @param retryMs how long a bot that could not find an affordable way on waits before trying again
 	 * @param escapeMinDistance a town closer than this is walked to even with a Scroll of Escape in the bag
 	 * @param spiritshotsPerKill spiritshots a mystic fires per kill (fighters use the soulshot rate of the supply tuning)
+	 * @param freeTeleportLevel the highest level the gatekeepers teleport for free; a bot at or below it pays no gatekeeper fee (0 or less: every bot pays)
 	 */
-	public record Params(double moveSpeed, long escapeCastMs, long errandStopMs, int afkChancePercent, long afkMinMs, long afkMaxMs, double potionsPerHour, int zoneCapacity, long retryMs, double escapeMinDistance, double spiritshotsPerKill)
+	public record Params(double moveSpeed, long escapeCastMs, long errandStopMs, int afkChancePercent, long afkMinMs, long afkMaxMs, double potionsPerHour, int zoneCapacity, long retryMs, double escapeMinDistance, double spiritshotsPerKill, int freeTeleportLevel)
 	{
 		/** The default spiritshot use: a caster fires one per spell, about two spells a kill. */
 		public static final double DEFAULT_SPIRITSHOTS_PER_KILL = 2.0;
 
 		public Params(double moveSpeed, long escapeCastMs, long errandStopMs, int afkChancePercent, long afkMinMs, long afkMaxMs, double potionsPerHour, int zoneCapacity, long retryMs, double escapeMinDistance)
 		{
-			this(moveSpeed, escapeCastMs, errandStopMs, afkChancePercent, afkMinMs, afkMaxMs, potionsPerHour, zoneCapacity, retryMs, escapeMinDistance, DEFAULT_SPIRITSHOTS_PER_KILL);
+			this(moveSpeed, escapeCastMs, errandStopMs, afkChancePercent, afkMinMs, afkMaxMs, potionsPerHour, zoneCapacity, retryMs, escapeMinDistance, DEFAULT_SPIRITSHOTS_PER_KILL, 0);
+		}
+
+		public Params(double moveSpeed, long escapeCastMs, long errandStopMs, int afkChancePercent, long afkMinMs, long afkMaxMs, double potionsPerHour, int zoneCapacity, long retryMs, double escapeMinDistance, double spiritshotsPerKill)
+		{
+			this(moveSpeed, escapeCastMs, errandStopMs, afkChancePercent, afkMinMs, afkMaxMs, potionsPerHour, zoneCapacity, retryMs, escapeMinDistance, spiritshotsPerKill, 0);
 		}
 	}
 
@@ -418,7 +424,7 @@ public final class ColdLife
 			// No scroll, and water between it and the town (an island without a town): it cannot walk, so it goes back
 			// the way it came, paying what the gatekeeper's way here cost (FPC-277).
 			final ZoneCatalog.Teleport link = (zone == null) ? null : zone.teleportFrom(town.name());
-			final long fee = (link == null) ? 0L : Math.min(Math.max(0L, bot.getAdena()), link.fee());
+			final long fee = ((link == null) || freeTeleport(bot, context)) ? 0L : Math.min(Math.max(0L, bot.getAdena()), link.fee());
 			bot.setAdena(bot.getAdena() - fee);
 			bot.setActivity(TO_TOWN);
 			bot.setLeg(TravelLeg.stay(from, now, context.travel().escapeCastMs()));
@@ -964,7 +970,7 @@ public final class ColdLife
 		if ((choice == null) && (current != null))
 		{
 			// Nothing better it can afford: go back to where it was, even if it no longer fits perfectly.
-			final ZoneChooser.Choice back = ZoneChooser.route(current, town, catalog);
+			final ZoneChooser.Choice back = ZoneChooser.route(current, town, catalog, situation.freeTeleport());
 			if ((back != null) && (back.fee() <= bot.getAdena()))
 			{
 				choice = back;
@@ -1062,11 +1068,21 @@ public final class ColdLife
 		return errand;
 	}
 
+	/**
+	 * @return whether the gatekeepers teleport this bot for free: its own level (not the lower one it hunts at while avoiding a
+	 *         zone) is at or below the server's MaxFreeTeleportLevel, as for a player
+	 */
+	private static boolean freeTeleport(ColdBot bot, Context context)
+	{
+		final int limit = context.travel().freeTeleportLevel();
+		return (limit > 0) && (bot.getLevel() <= limit);
+	}
+
 	/** @return the gatekeeper fee from this town back to the bot's zone (0 on foot or when it has no zone) */
 	private static long feeBack(ColdBot bot, Town town, Context context)
 	{
 		final Zone zone = context.catalog().zone(bot.getZone());
-		final ZoneChooser.Choice back = (zone == null) ? null : ZoneChooser.route(zone, town, context.catalog());
+		final ZoneChooser.Choice back = (zone == null) ? null : ZoneChooser.route(zone, town, context.catalog(), freeTeleport(bot, context));
 		return (back == null) ? 0L : Math.max(0L, back.fee());
 	}
 
@@ -1402,7 +1418,7 @@ public final class ColdLife
 		final ColdRisk.State risk = bot.getRisk();
 		final boolean avoiding = risk.avoiding(now);
 		final int level = avoiding ? Math.max(1, bot.getLevel() - ColdRisk.AVOID_LEVEL_PENALTY) : bot.getLevel();
-		return new ZoneChooser.Situation(level, bot.getRace(), current, town, budget, occupancy, context.travel().zoneCapacity(), avoiding ? risk.avoidZone() : null);
+		return new ZoneChooser.Situation(level, bot.getRace(), current, town, budget, occupancy, context.travel().zoneCapacity(), avoiding ? risk.avoidZone() : null, freeTeleport(bot, context));
 	}
 
 	private static String planKey(GoalPlanner.Plan plan)

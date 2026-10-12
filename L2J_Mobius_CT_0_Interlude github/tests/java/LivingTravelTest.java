@@ -292,6 +292,17 @@ public class LivingTravelTest
 		final ZoneChooser.Choice spill = ZoneChooser.choose(new ZoneChooser.Situation(21, "Elf", null, alpha, 100_000L, allFull, 8), catalog, null);
 		check("when every zone that fits is full it goes to the least crowded one", (spill != null) && "Beyond".equals(spill.zone().name()));
 		check("but still not to one it cannot afford", ZoneChooser.choose(new ZoneChooser.Situation(21, "Elf", null, alpha, 100L, allFull, 8), catalog, null) == null);
+
+		// Gatekeepers teleport free up to the server's MaxFreeTeleportLevel: a bot at or below it pays nothing, even with no adena.
+		final ZoneChooser.Choice freeFar = ZoneChooser.route(catalog.zone("Far Hills"), alpha, catalog, true);
+		check("a free teleport costs nothing but is still a gatekeeper way", (freeFar.way() == ZoneChooser.Way.GATEKEEPER) && (freeFar.fee() == 0L));
+		final ZoneChooser.Choice freeHop = ZoneChooser.route(catalog.zone("Beyond"), alpha, catalog, true);
+		check("a free hop costs nothing", (freeHop.way() == ZoneChooser.Way.HOP) && "Beta".equals(freeHop.viaTown()) && (freeHop.fee() == 0L));
+		check("not free keeps the fee", ZoneChooser.route(catalog.zone("Far Hills"), alpha, catalog, false).fee() == 2000L);
+		check("a walk stays a walk", ZoneChooser.route(catalog.zone("Near Woods"), alpha, catalog, true).way() == ZoneChooser.Way.WALK);
+		final ZoneChooser.Choice broke = ZoneChooser.choose(new ZoneChooser.Situation(25, "Elf", catalog.zone("Near Woods"), alpha, 0L, null, 0, null, true), catalog, null);
+		check("a free bot with no adena still travels", (broke != null) && (broke.fee() == 0L) && "Beyond".equals(broke.zone().name()));
+		check("a paying bot with no adena does not", ZoneChooser.choose(new ZoneChooser.Situation(25, "Elf", catalog.zone("Near Woods"), alpha, 0L, null, 0, null, false), catalog, null) == null);
 	}
 
 	private static void testTravelLeg()
@@ -390,6 +401,29 @@ public class LivingTravelTest
 		ColdLife.advance(broke, 1L, 1L, context, events);
 		check("too poor for a gatekeeper it walks to the nearest fitting zone", ColdLife.TO_ZONE.equals(broke.getActivity()) && "Beyond".equals(broke.getZone()) && (broke.getAdena() == 600L) && (broke.getLeg().to().x() == 121000));
 		check("the walk says why", events.stream().anyMatch(e -> e.text().contains("on foot, as it cannot afford a gatekeeper")));
+
+		// The same bot at or below the server's free-teleport level pays no gatekeeper fee, so 600 adena is enough (and stays in its purse).
+		final ColdLife.Params freeTravel = new ColdLife.Params(100.0, 20_000L, 10_000L, 0, 60_000L, 60_000L, 4.0, 8, 300_000L, 2500.0, ColdLife.Params.DEFAULT_SPIRITSHOTS_PER_KILL, 40);
+		final ColdLife.Context freeContext = new ColdLife.Context(catalog(), supply(), freeTravel, (level, tier) -> prices(), new HashMap<>(), new Random(7));
+		final ColdBot free = bot(21, "Far Hills", 600L, 10L, 2L, 0);
+		free.setActivity(ColdLife.IN_TOWN);
+		free.setTown("Alpha");
+		free.setLevel(30);
+		free.setGearTier(2);
+		free.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		events.clear();
+		ColdLife.advance(free, 1L, 1L, freeContext, events);
+		check("a free-teleport bot takes the gatekeeper for nothing", ColdLife.TO_ZONE.equals(free.getActivity()) && "Beyond".equals(free.getZone()) && (free.getAdena() == 600L) && events.stream().noneMatch(e -> e.text().contains("on foot, as it cannot afford a gatekeeper")));
+		final ColdBot over = bot(21, "Far Hills", 600L, 10L, 2L, 0);
+		over.setActivity(ColdLife.IN_TOWN);
+		over.setTown("Alpha");
+		over.setLevel(30);
+		over.setGearTier(2);
+		over.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		final ColdLife.Params lowLimit = new ColdLife.Params(100.0, 20_000L, 10_000L, 0, 60_000L, 60_000L, 4.0, 8, 300_000L, 2500.0, ColdLife.Params.DEFAULT_SPIRITSHOTS_PER_KILL, 29);
+		events.clear();
+		ColdLife.advance(over, 1L, 1L, new ColdLife.Context(catalog(), supply(), lowLimit, (level, tier) -> prices(), new HashMap<>(), new Random(7)), events);
+		check("one level above the free limit it still pays (here it cannot, so it walks)", events.stream().anyMatch(e -> e.text().contains("on foot, as it cannot afford a gatekeeper")));
 
 		// No zone fits its level at all: it hunts the highest one it has outgrown rather than wait in town (FPC-297).
 		final ColdBot stuck = bot(21, "Far Hills", 600L, 10L, 2L, 0);

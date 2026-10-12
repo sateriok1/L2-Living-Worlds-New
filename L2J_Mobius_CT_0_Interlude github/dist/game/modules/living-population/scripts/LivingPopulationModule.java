@@ -20,6 +20,7 @@
  */
 package modules.livingpopulation;
 
+import org.l2jmobius.gameserver.config.PlayerConfig;
 import org.l2jmobius.gameserver.handler.IVoicedCommandHandler;
 import org.l2jmobius.gameserver.livingpop.LivingPopulationConfig;
 import org.l2jmobius.gameserver.livingpop.LivingPopulationManager;
@@ -123,7 +124,8 @@ public class LivingPopulationModule implements GameModule
 			}, //
 			context.config().getBoolean("SkillTraining", true), //
 			context.config().getBoolean("GearSlots", true), //
-			context.config().getBoolean("GearTrade", true));
+			context.config().getBoolean("GearTrade", true), //
+			freeTeleportLevel(context.config().getInt("FreeTeleportLevel", -1)));
 
 		// Zone combat: each cold bot's kill and death rates come from its gear and skills against its zone's monsters.
 		LivingPopulationManager.getInstance().setZoneCombat(new ZoneCombat.Params( //
@@ -181,6 +183,15 @@ public class LivingPopulationModule implements GameModule
 	}
 
 	/** @return the chances in a comma list ("0.15,0.075,..."), each between 0 and 1; a bad entry counts as 0 */
+	/**
+	 * @param configured the FreeTeleportLevel setting: a level, 0 for none, or below 0 to follow the server's MaxFreeTeleportLevel
+	 * @return the highest level the gatekeepers teleport for free
+	 */
+	private static int freeTeleportLevel(int configured)
+	{
+		return (configured < 0) ? PlayerConfig.MAX_FREE_TELEPORT_LEVEL : configured;
+	}
+
 	private static double[] chancesOf(String list)
 	{
 		final String[] parts = list.split(",");

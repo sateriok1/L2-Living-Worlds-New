@@ -83,12 +83,19 @@ public final class ZoneChooser
 	 * @param occupancy how many bots are in or heading to each zone (the bot itself excluded)
 	 * @param capacity how many bots a zone takes before it counts as full
 	 * @param avoid a zone it is staying away from after dying there, or null
+	 * @param freeTeleport whether the bot's own level is low enough for the gatekeepers to teleport it for free (the server's
+	 *            MaxFreeTeleportLevel); its own level, not {@code level}, which drops while it avoids a zone
 	 */
-	public record Situation(int level, String race, Zone currentZone, Town town, long budget, Map<String, Integer> occupancy, int capacity, String avoid)
+	public record Situation(int level, String race, Zone currentZone, Town town, long budget, Map<String, Integer> occupancy, int capacity, String avoid, boolean freeTeleport)
 	{
 		public Situation(int level, String race, Zone currentZone, Town town, long budget, Map<String, Integer> occupancy, int capacity)
 		{
-			this(level, race, currentZone, town, budget, occupancy, capacity, null);
+			this(level, race, currentZone, town, budget, occupancy, capacity, null, false);
+		}
+
+		public Situation(int level, String race, Zone currentZone, Town town, long budget, Map<String, Integer> occupancy, int capacity, String avoid)
+		{
+			this(level, race, currentZone, town, budget, occupancy, capacity, avoid, false);
 		}
 
 		boolean avoids(Zone zone)
@@ -118,7 +125,7 @@ public final class ZoneChooser
 			if (zone.isStarter() && zone.starterRace().equals(situation.race()) && (situation.level() <= zone.maxLevel()) && !situation.avoids(zone))
 			{
 				// On foot from a town on their land, by gatekeeper from one across the water (FPC-277).
-				final Choice starter = route(zone, town, catalog);
+				final Choice starter = route(zone, town, catalog, situation.freeTeleport());
 				if ((starter != null) && (starter.fee() <= situation.budget()))
 				{
 					return starter;
@@ -131,7 +138,7 @@ public final class ZoneChooser
 		final Zone current = situation.currentZone();
 		if ((current != null) && !current.isStarter() && !situation.avoids(current) && (situation.level() >= current.minLevel()) && (situation.level() <= (current.maxLevel() + OUTLEVEL_SLACK)) && !overFull(current, situation))
 		{
-			final Choice stay = route(current, town, catalog);
+			final Choice stay = route(current, town, catalog, situation.freeTeleport());
 			if ((stay != null) && (stay.fee() <= situation.budget()))
 			{
 				return stay;
@@ -146,7 +153,7 @@ public final class ZoneChooser
 			{
 				continue;
 			}
-			final Choice choice = route(zone, town, catalog);
+			final Choice choice = route(zone, town, catalog, situation.freeTeleport());
 			if ((choice != null) && (choice.fee() <= situation.budget()))
 			{
 				(full(zone, situation) ? crowded : options).add(choice);
@@ -200,6 +207,25 @@ public final class ZoneChooser
 	 * @return the way, or null when the zone cannot be reached from this town
 	 */
 	public static Choice route(Zone zone, Town town, ZoneCatalog catalog)
+	{
+		return cheapest(zone, town, catalog);
+	}
+
+	/**
+	 * The cheapest way from a town to a zone, for a bot that may be low enough in level to teleport for free.
+	 * @param zone the zone
+	 * @param town the town
+	 * @param catalog the catalog (for hops)
+	 * @param freeTeleport true when the gatekeepers charge this bot nothing (it is at or below the server's MaxFreeTeleportLevel)
+	 * @return the way, with no fee when {@code freeTeleport}, or null when the zone cannot be reached from this town
+	 */
+	public static Choice route(Zone zone, Town town, ZoneCatalog catalog, boolean freeTeleport)
+	{
+		final Choice way = cheapest(zone, town, catalog);
+		return (freeTeleport && (way != null) && (way.fee() > 0)) ? new Choice(way.zone(), way.way(), way.viaTown(), 0L, way.arrival()) : way;
+	}
+
+	private static Choice cheapest(Zone zone, Town town, ZoneCatalog catalog)
 	{
 		// Never on foot across water (FPC-277): a zone on another island is reached through the gatekeepers only.
 		final boolean sameLand = catalog.sameLand(zone.center(), town.arrival());

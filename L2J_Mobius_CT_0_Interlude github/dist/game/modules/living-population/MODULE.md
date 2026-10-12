@@ -170,6 +170,7 @@ keeps it.
 | `SkillTraining` | Bots earn SP and learn skills at their trainer (the class masters of their line), paying SP and buying spellbooks at real prices, instead of knowing every skill of their level. |
 | `GearSlots` | Bots keep gear per slot and gear up piece by piece: on a town visit they buy, slot by slot, the best piece their class uses, their level allows and they can afford, and they wear the better weapon and armor drops (cold bots roll their zone's real drops, hot bots what they pick up). False keeps whole gear tiers. |
 | `GearTrade` | Gear no shop in the bot's town sells (town shops stop at D grade) can be bought as if from another player, at the item's reference price. A stand-in until bots trade with each other (`GearCatalog.tradePrice`); with it off, better gear comes only from drops. |
+| `FreeTeleportLevel` | The highest level at which gatekeepers teleport a bot for free. -1 (the default) follows the server's `MaxFreeTeleportLevel` (40); 0 makes every bot pay. Bots above it pay the listed fee. |
 | `MaxLevel` | Level at which cold progression stops. |
 | `SnapshotIntervalSeconds` | How often the monitoring snapshot is written. |
 | `SnapshotFile` | Path of the monitoring JSON snapshot. |
