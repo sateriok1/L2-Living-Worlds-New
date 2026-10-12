@@ -60,6 +60,12 @@ public final class ColdLife
 	public static final String CRAFTING = "crafting";
 	/** A Merchant reading a Scroll of Escape to leave the isle. */
 	public static final String CRAFT_RETURN = "craft_return";
+	/** A Merchant on her buying trip for a gear order, town by town. */
+	public static final String GEAR_SHOP = "gear_shop";
+	/** A Merchant crafting a gear order, slowly. */
+	public static final String GEAR_CRAFT = "gear_craft";
+	/** A Merchant waiting in a town for the hunter that ordered a piece. */
+	public static final String GEAR_MEET = "gear_meet";
 	/** A Merchant paying the gatekeeper to the town it sells its shots in. */
 	public static final String DELIVERING = "delivering";
 	/** A member of a raid party, away from hunting until the raid director ends the raid. */
@@ -285,8 +291,14 @@ public final class ColdLife
 		/** Takes shots out of a town's shops for a buyer and pays their owner what the buyer pays. @return whether that many were there */
 		boolean buyShots(String town, int shotItemId, long count, long unitPrice);
 
-		/** @return the world the gear crafting reads (stock, reference and vendor prices), or null when she does not craft gear */
-		default GearCrafting.Market gearMarket()
+		/** @return how she runs the gear trade, or null when she does not craft gear */
+		default GearCrafting.Params gearParams()
+		{
+			return null;
+		}
+
+		/** @return the world the gear crafting reads (stock, reference and vendor prices) with the share she pays the owners of stock in one purchase */
+		default GearCrafting.Market gearMarket(double share)
 		{
 			return null;
 		}
@@ -297,63 +309,64 @@ public final class ColdLife
 			return List.of();
 		}
 
-		/** @return product id to how many hunters want it now (each hunter counts once, and only for what she can craft now) */
-		default Map<Integer, Double> gearWanted()
-		{
-			return Map.of();
-		}
-
-		/** @return how many of a piece her shops hold */
-		default long gearOnSale(int productId)
-		{
-			return 0L;
-		}
-
-		/** Records what a hunter wishes to buy (0 for nothing); counted only when the Merchant can craft it now. */
-		default void gearWish(long botId, int productId)
+		/** Puts a hunter's wish in the book of orders; counted only when the Merchant can craft the piece now, else dropped. */
+		default void gearWish(long botId, int botLevel, int productId, long budget, long now)
 		{
 		}
 
-		/** @return the offers her shop in a town makes (a piece she holds, at her price) */
-		default List<LivingGear.Offer> gearOffers(String town, LivingGear.Items items)
+		/** Drops a hunter's wish (an order she is crafting or has ready stays). */
+		default void gearClear(long botId)
+		{
+		}
+
+		/** @return a hunter's order, or null */
+		default GearOrders.Order gearOrder(long botId)
+		{
+			return null;
+		}
+
+		/** @return the wishes in the book, the strongest hunter first */
+		default List<GearOrders.Order> gearWishes()
 		{
 			return List.of();
 		}
 
-		/** @return the price her shop sells a piece at now, 0 when she does not craft it */
-		default long gearPrice(int productId)
+		/** @return the order she is crafting now, or null (she crafts one at a time) */
+		default GearOrders.Order gearCrafting()
 		{
-			return 0L;
+			return null;
 		}
 
-		/** Takes a piece out of her shop in a town for a buyer and pays her. @return whether it was there */
-		default boolean buyGear(String town, int productId, long price)
+		/**
+		 * She takes a wish: the materials and the recipe leave the towns' stock and the vendors (the owners are paid), and the hunter pays its advance.
+		 * @return the towns the buying took her to (the last is where she crafts), or null when the stock moved and nothing was bought
+		 */
+		default List<String> gearAccept(GearOrders.Order wish, GearCrafting.Quote quote, long advance, long craftMs, long now)
+		{
+			return null;
+		}
+
+		/** The piece is crafted: it is parked in a town's stock for its hunter. */
+		default void gearReady(long botId, String town, long now)
+		{
+		}
+
+		/** @return the offers a hunter has in a town: its finished piece, parked there, at what it still owes */
+		default List<LivingGear.Offer> gearOffers(long botId, String town, LivingGear.Items items)
+		{
+			return List.of();
+		}
+
+		/** The hunter meets her and the trade is made: the piece leaves the stock for the hunter and she is paid what it owes. @return whether it went through */
+		default boolean gearTrade(long botId, String town, int productId, long paid)
 		{
 			return false;
 		}
 
-		/** Takes the materials and the recipe of a gear plan out of the towns' stock (paying their owners) and the vendors. @return whether they were all still there */
-		default boolean buyGearMaterials(GearCrafting.Plan plan, Set<Integer> known)
-		{
-			return false;
-		}
-
-		/** @return the fewest crafts that are worth the trip to Devil's Isle; a smaller batch is crafted on the spot and delivered */
+		/** @return the fewest crafts that are worth the trip to Devil's Isle for shots; a smaller batch is crafted on the spot and delivered */
 		default long isleMinCrafts()
 		{
 			return 0L;
-		}
-
-		/** @return the adena she keeps for crafting and shots before she spends any on her own upgrades */
-		default long workingCapital()
-		{
-			return 0L;
-		}
-
-		/** @return the share of the adena above that she may spend on her own upgrades (0 to 1) */
-		default double upgradeShare()
-		{
-			return 1.0;
 		}
 	}
 
@@ -514,6 +527,21 @@ public final class ColdLife
 			case DELIVERING:
 			{
 				listCarry(bot, context, events);
+				leaveTown(bot, now, context, events);
+				break;
+			}
+			case GEAR_SHOP:
+			{
+				beginGearCraft(bot, now, context, events);
+				break;
+			}
+			case GEAR_CRAFT:
+			{
+				finishGearCraft(bot, now, context, events);
+				break;
+			}
+			case GEAR_MEET:
+			{
 				leaveTown(bot, now, context, events);
 				break;
 			}
@@ -1119,7 +1147,7 @@ public final class ColdLife
 		final MerchantPlanner.Plan plan = MerchantPlanner.decide(bot.getRecipes(), bot.getLevel(), wanted, held, shop.hoursOfStock(), shop.maxCrafts(), bot.getAdena() - reserve - fee, shop.prices());
 		if (plan == null)
 		{
-			return gearTrip(bot, town, now, context, events, reserve, fee, canIsle ? way : null);
+			return gearTrip(bot, town, now, context, events, reserve);
 		}
 		if (plan.crafts() < shop.isleMinCrafts())
 		{
@@ -1145,63 +1173,121 @@ public final class ColdLife
 	}
 
 	/**
-	 * The Merchant's gear business, when the shots need nothing: she crafts what hunters wish for that she can make now. The
-	 * recipe and the materials come out of the towns' stock at 60% of their reference price, and from the vendors for what
-	 * the stock lacks. She is a level 1 traveller in this: buying costs no gatekeeper fee and no time.
-	 * @return whether it set off
+	 * The Merchant's gear business, when the shots need nothing: she works the book of orders, the strongest hunter first, one
+	 * craft at a time. For the first wish she can fill she rolls the share she pays for stock (60 to 80% of the reference
+	 * price), works out the cost and her price (the cost plus 10%, with the recipe's cost added), and checks that the hunter can
+	 * pay it. She only lays out what she can afford; if the hunter can pay and she cannot cover the craft, the hunter pays the
+	 * rest as an advance. The materials leave the stock, and she walks the towns to fetch them.
+	 * @return whether she set off
 	 */
-	private static boolean gearTrip(ColdBot bot, Town town, long now, Context context, List<DecisionLog.Event> events, long reserve, long fee, ZoneCatalog.Teleport way)
+	private static boolean gearTrip(ColdBot bot, Town town, long now, Context context, List<DecisionLog.Event> events, long reserve)
 	{
 		final Workshop shop = context.workshop();
-		final GearCrafting.Market market = shop.gearMarket();
-		if (market == null)
+		final GearCrafting.Params params = shop.gearParams();
+		if ((params == null) || (shop.gearCrafting() != null))
 		{
-			return false;
+			return false; // gear off, or she is already at a craft
 		}
-		final List<GearCrafting.Recipe> recipes = shop.gearRecipes();
-		final Map<Integer, Double> wanted = shop.gearWanted();
-		final Map<Integer, Long> held = new HashMap<>();
-		for (GearCrafting.Recipe recipe : recipes)
+		final Random random = context.random();
+		for (GearOrders.Order wish : shop.gearWishes())
 		{
-			if (wanted.containsKey(recipe.productId()))
+			GearCrafting.Recipe recipe = null;
+			for (GearCrafting.Recipe candidate : shop.gearRecipes())
 			{
-				held.put(recipe.productId(), shop.gearOnSale(recipe.productId()));
+				if (candidate.productId() == wish.productId())
+				{
+					recipe = candidate;
+					break;
+				}
+			}
+			final double share = params.shareMin() + (random.nextDouble() * Math.max(0.0, params.shareMax() - params.shareMin()));
+			final GearCrafting.Market market = (recipe == null) ? null : shop.gearMarket(share);
+			if (market == null)
+			{
+				continue;
+			}
+			final double surchargeShare = GearCrafting.SURCHARGE_MIN + (random.nextDouble() * (GearCrafting.SURCHARGE_MAX - GearCrafting.SURCHARGE_MIN));
+			final GearCrafting.Quote quote = GearCrafting.quote(recipe, bot.getLevel(), bot.getGearRecipes(), market, wish.budget(), surchargeShare);
+			if (quote == null)
+			{
+				continue; // not craftable now, or more than the hunter can pay
+			}
+			// She lays out only what she can afford; the hunter advances the rest, if it can.
+			final long advance = Math.max(0L, quote.outlay() - Math.max(0L, bot.getAdena() - reserve));
+			if ((advance > 0L) && ((advance > quote.price()) || (advance > wish.budget())))
+			{
+				continue;
+			}
+			final long craftMs = Math.round(GearCrafting.craftMinutes(params.craftBaseMinutes(), recipe.craftLevel(), GearCrafting.craftLevelFor(bot.getLevel())) * 60_000.0);
+			final List<String> towns = shop.gearAccept(wish, quote, advance, craftMs, now);
+			if (towns == null)
+			{
+				continue; // the stock moved or the hunter could no longer pay: next order
+			}
+			bot.setAdena(Math.max(0L, bot.getAdena() - quote.outlay() + advance));
+			if (quote.recipeCost() > 0L)
+			{
+				bot.addGearRecipe(recipe.recipeItemId());
+			}
+			bot.setActivity(GEAR_SHOP);
+			bot.setLeg(TravelLeg.stay(point(bot), now, Math.max(1, towns.size()) * params.shopLegMs()));
+			events.add(new DecisionLog.Event(null, "Took an order for item " + recipe.productId() + " from a level " + wish.botLevel() + " hunter at " + DecisionLog.num(quote.price()) + " adena (materials " + DecisionLog.num(quote.materials()) + ((quote.recipeCost() > 0L) ? (", recipe " + DecisionLog.num(quote.recipeCost()) + ", " + DecisionLog.num(quote.surcharge()) + " of it in the price") : "") + ((advance > 0L) ? (", advance " + DecisionLog.num(advance) + " from the hunter") : "") + "). Walks " + String.join(", ", towns) + " for the stock"));
+			return true;
+		}
+		return false;
+	}
+
+	/** The buying trip is over: she is in the last town and starts the craft, which takes her a while. */
+	private static void beginGearCraft(ColdBot bot, long now, Context context, List<DecisionLog.Event> events)
+	{
+		final Workshop shop = context.workshop();
+		final GearOrders.Order order = (shop == null) ? null : shop.gearCrafting();
+		if (order == null)
+		{
+			leaveTown(bot, now, context, events); // the order is gone (cancelled or lost): back to hunting
+			return;
+		}
+		final Town where = (order.town() == null) ? null : context.catalog().town(order.town());
+		if (where != null)
+		{
+			moveTo(bot, where.arrival());
+			bot.setTown(where.name());
+		}
+		bot.setActivity(GEAR_CRAFT);
+		bot.setLeg(TravelLeg.stay(point(bot), now, Math.max(60_000L, order.craftMs())));
+		events.add(new DecisionLog.Event(null, "Began crafting item " + order.productId() + " in " + bot.getTown() + " (about " + minutes(order.craftMs()) + ")"));
+	}
+
+	/** The craft is done: the piece is parked in its sale town for the hunter, and she waits there a while for it. */
+	private static void finishGearCraft(ColdBot bot, long now, Context context, List<DecisionLog.Event> events)
+	{
+		final Workshop shop = context.workshop();
+		final GearOrders.Order order = (shop == null) ? null : shop.gearCrafting();
+		if (order == null)
+		{
+			leaveTown(bot, now, context, events);
+			return;
+		}
+		String saleTown = GearCrafting.C_TOWN;
+		for (GearCrafting.Recipe recipe : shop.gearRecipes())
+		{
+			if (recipe.productId() == order.productId())
+			{
+				saleTown = recipe.saleTown();
 			}
 		}
-		final GearCrafting.Plan plan = GearCrafting.decide(bot.getGearRecipes(), bot.getLevel(), recipes, wanted, held, 1.0, shop.maxCrafts(), bot.getAdena() - reserve - fee, market);
-		if (plan == null)
+		final Town dest = context.catalog().town(saleTown);
+		shop.gearReady(order.botId(), saleTown, now);
+		long wait = shop.gearParams().meetMs();
+		if ((dest != null) && !dest.name().equals(bot.getTown()))
 		{
-			return false;
+			moveTo(bot, dest.arrival());
+			bot.setTown(dest.name()); // she walks to the gatekeeper and takes it: no fee, but not instant
+			wait += shop.gearParams().shopLegMs();
 		}
-		final boolean small = (plan.crafts() < shop.isleMinCrafts()) || (way == null);
-		if (small && (plan.crafts() >= shop.isleMinCrafts()))
-		{
-			return false; // a big batch but no way to the isle
-		}
-		if (!small && !MATERIALS_TOWN.equals(town.name()))
-		{
-			return hop(bot, town, MATERIALS_TOWN, "the materials for " + DecisionLog.num(plan.pieces()) + " pieces of gear", now, context, events);
-		}
-		if (!shop.buyGearMaterials(plan, bot.getGearRecipes()))
-		{
-			return false; // the stock changed while it planned: it plans again next visit
-		}
-		bot.setAdena(bot.getAdena() - plan.cost() - (small ? 0L : fee));
-		if (plan.recipeCost() > 0L)
-		{
-			bot.addGearRecipe(plan.recipe().recipeItemId());
-		}
-		if (small)
-		{
-			return craftInTown(bot, town, now, context, events, plan.recipe().productId(), plan.pieces(), plan.recipe().saleTown(), "pieces of gear", 0L);
-		}
-		bot.setCarry(plan.recipe().productId(), plan.pieces(), plan.recipe().saleTown());
-		moveTo(bot, way.arrival());
-		bot.setTown(null);
-		bot.setActivity(CRAFTING);
-		bot.setLeg(TravelLeg.stay(way.arrival(), now, shop.craftMs()));
-		events.add(new DecisionLog.Event(null, "Bought the " + ((plan.recipeCost() > 0L) ? "recipe and " : "") + "materials for " + DecisionLog.num(plan.pieces()) + " pieces of gear (item " + plan.recipe().productId() + ") from the towns' stock and the vendors for " + DecisionLog.num(plan.cost()) + " adena. Off to " + CRAFT_ZONE + " to craft them"));
-		return true;
+		bot.setActivity(GEAR_MEET);
+		bot.setLeg(TravelLeg.stay(point(bot), now, wait));
+		events.add(new DecisionLog.Event(null, "Finished item " + order.productId() + " and left it in " + saleTown + " for its hunter. Waits there " + minutes(shop.gearParams().meetMs())));
 	}
 
 	/**
@@ -1297,7 +1383,7 @@ public final class ColdLife
 		{
 			shop.list(bot.getTown(), bot.getId(), bot.getCarryItem(), count);
 			final ShotCrafting.Recipe recipe = ShotCrafting.byShot(bot.getCarryItem());
-			events.add(new DecisionLog.Event(null, "Put " + DecisionLog.num(count) + " " + carryNoun(bot) + " (item " + bot.getCarryItem() + ") on sale in " + bot.getTown() + ((recipe == null) ? ((shop.gearPrice(bot.getCarryItem()) > 0L) ? (", at " + DecisionLog.num(shop.gearPrice(bot.getCarryItem())) + " adena each (cost plus 10%)") : "") : (", never below " + DecisionLog.num(ShotCrafting.floorPrice(recipe, shop.prices())) + " adena each"))));
+			events.add(new DecisionLog.Event(null, "Put " + DecisionLog.num(count) + " " + carryNoun(bot) + " (item " + bot.getCarryItem() + ") on sale in " + bot.getTown() + ((recipe == null) ? "" : (", never below " + DecisionLog.num(ShotCrafting.floorPrice(recipe, shop.prices())) + " adena each"))));
 		}
 		bot.setCarry(0, 0L, null);
 	}
@@ -1720,6 +1806,18 @@ public final class ColdLife
 			return new String[3];
 		}
 		final LivingGear.Fit fit = fitOf(shop, bot.getClassId(), bot.getId(), bot.getLevel());
+		final Workshop made = context.workshop();
+		final GearOrders.Order order = ((made == null) || (made.gearParams() == null) || isMerchant(bot)) ? null : made.gearOrder(bot.getId());
+		if ((order != null) && (order.state() == GearOrders.State.READY) && (order.due() <= upgradeBudget(bot, purse(bot), context)))
+		{
+			final LivingGear.Piece piece = shop.items().piece(order.productId());
+			return new String[]
+			{
+				"Its " + ((piece == null) ? ("item " + order.productId()) : piece.name()) + " is ready: meets " + ShotCrafting.MERCHANT + " in " + order.town() + " for " + DecisionLog.num(order.due()) + " adena",
+				null,
+				"gear-" + order.productId()
+			};
+		}
 		final List<LivingGear.Offer> offers = offersIn(shop, town);
 		// What it will have for gear in town: its purse once the loot is sold, less the supplies it buys first (counting
 		// the Scroll of Escape the trip itself uses, when it uses one rather than walking).
@@ -1762,14 +1860,14 @@ public final class ColdLife
 		};
 	}
 
-	/** @return the town's offers with the Merchant's pieces added, each at her price when that is below the one on offer */
-	private static List<LivingGear.Offer> withCrafted(List<LivingGear.Offer> base, Workshop workshop, Town town, GearShop shop)
+	/** @return the town's offers with the piece the Merchant has made for this hunter, when it is parked here (at what it still owes) */
+	private static List<LivingGear.Offer> withCrafted(List<LivingGear.Offer> base, ColdBot bot, Workshop workshop, Town town, GearShop shop)
 	{
 		if (workshop == null)
 		{
 			return base;
 		}
-		final List<LivingGear.Offer> hers = workshop.gearOffers(town.name(), shop.items());
+		final List<LivingGear.Offer> hers = workshop.gearOffers(bot.getId(), town.name(), shop.items());
 		if (hers.isEmpty())
 		{
 			return base;
@@ -1777,16 +1875,7 @@ public final class ColdLife
 		final List<LivingGear.Offer> offers = new ArrayList<>(base);
 		for (LivingGear.Offer offer : hers)
 		{
-			if (!shop.wearable(offer.piece().itemId()))
-			{
-				continue;
-			}
-			boolean cheaper = true;
-			for (LivingGear.Offer other : base)
-			{
-				cheaper &= (other.piece().itemId() != offer.piece().itemId()) || (other.price() > offer.price());
-			}
-			if (cheaper)
+			if (shop.wearable(offer.piece().itemId()))
 			{
 				offers.removeIf(other -> other.piece().itemId() == offer.piece().itemId());
 				offers.add(offer);
@@ -1795,65 +1884,61 @@ public final class ColdLife
 		return offers;
 	}
 
-	/** What a hunter still wishes for after its shopping: the Merchant counts a wish toward her next craft, when she can make it now. */
-	private static void wishFor(ColdBot bot, Town town, Context context, Map<LivingGear.Slot, Integer> gear, LivingGear.Fit fit)
+	/**
+	 * What a hunter still wishes for after its shopping goes in the book of orders, with what it can spend on it now. The
+	 * Merchant only keeps the wishes she can craft; a hunter whose order is already being crafted or is ready keeps it.
+	 */
+	private static void wishFor(ColdBot bot, Town town, Context context, Map<LivingGear.Slot, Integer> gear, LivingGear.Fit fit, long now)
 	{
 		final Workshop workshop = context.workshop();
 		final GearShop shop = context.gear();
-		if ((workshop == null) || (shop == null) || (workshop.gearMarket() == null) || isMerchant(bot))
+		if ((workshop == null) || (shop == null) || (workshop.gearParams() == null) || isMerchant(bot))
 		{
 			return;
 		}
 		final LivingGear.Change wish = LivingGear.wish(gear, fit, bot.getLevel(), offersIn(shop, town), shop.items());
-		workshop.gearWish(bot.getId(), (wish == null) ? 0 : wish.piece().itemId());
+		if (wish == null)
+		{
+			workshop.gearClear(bot.getId());
+			return;
+		}
+		workshop.gearWish(bot.getId(), bot.getLevel(), wish.piece().itemId(), upgradeBudget(bot, bot.getAdena(), context), now);
 	}
 
 	/**
-	 * The Merchant's gear is on sale in Gludio (D) and Giran (C and better): a hunter somewhere else, who could afford a better
-	 * piece of hers, goes there for it. Gatekeeper fees are paid as for any trip.
+	 * The Merchant has made a hunter's piece and parked it in Gludio (D) or Giran (C and better): the hunter goes there to
+	 * meet her and trade, paying the gatekeeper as for any trip, if it can still pay what it owes.
 	 * @return whether it set off
 	 */
 	private static boolean shopForCraftedGear(ColdBot bot, Town town, long now, Context context, List<DecisionLog.Event> events)
 	{
 		final Workshop workshop = context.workshop();
-		final GearShop shop = context.gear();
-		if ((workshop == null) || (shop == null) || (workshop.gearMarket() == null) || isMerchant(bot))
+		if ((workshop == null) || (workshop.gearParams() == null) || isMerchant(bot))
 		{
 			return false;
 		}
-		final LivingGear.Fit fit = fitOf(shop, bot.getClassId(), bot.getId(), bot.getLevel());
-		for (String saleTown : new String[]
+		final GearOrders.Order order = workshop.gearOrder(bot.getId());
+		if ((order == null) || (order.state() != GearOrders.State.READY) || (order.town() == null) || order.town().equals(town.name()))
 		{
-			GearCrafting.D_TOWN,
-			GearCrafting.C_TOWN
-		})
-		{
-			final Town dest = context.catalog().town(saleTown);
-			final long listed = (dest == null) ? -1L : town.feeTo(saleTown);
-			if ((dest == null) || (dest == town) || (listed < 0L))
-			{
-				continue;
-			}
-			final long fee = freeTeleport(bot, context) ? 0L : listed;
-			final long budget = upgradeBudget(bot, bot.getAdena(), context) - fee;
-			final List<LivingGear.Offer> hers = workshop.gearOffers(saleTown, shop.items());
-			if ((budget <= 0L) || hers.isEmpty())
-			{
-				continue;
-			}
-			final List<LivingGear.Change> got = LivingGear.shop(gearOf(bot), fit, bot.getLevel(), budget, hers, shop.items());
-			if (got.isEmpty())
-			{
-				continue;
-			}
-			bot.setAdena(bot.getAdena() - fee);
-			bot.setTown(dest.name());
-			bot.setActivity(TO_TOWN);
-			bot.setLeg(TravelLeg.stay(dest.arrival(), now, context.travel().escapeCastMs()));
-			events.add(new DecisionLog.Event(null, "Goes to " + dest.name() + " for " + got.get(0).piece().name() + " from " + ShotCrafting.MERCHANT + "'s shop (gatekeeper " + DecisionLog.num(fee) + " adena)"));
-			return true;
+			return false;
 		}
-		return false;
+		final Town dest = context.catalog().town(order.town());
+		final long listed = (dest == null) ? -1L : town.feeTo(order.town());
+		if (listed < 0L)
+		{
+			return false;
+		}
+		final long fee = freeTeleport(bot, context) ? 0L : listed;
+		if ((upgradeBudget(bot, bot.getAdena(), context) - fee) < order.due())
+		{
+			return false;
+		}
+		bot.setAdena(bot.getAdena() - fee);
+		bot.setTown(dest.name());
+		bot.setActivity(TO_TOWN);
+		bot.setLeg(TravelLeg.stay(dest.arrival(), now, context.travel().escapeCastMs()));
+		events.add(new DecisionLog.Event(null, "Goes to " + dest.name() + " to meet " + ShotCrafting.MERCHANT + " for its item " + order.productId() + " (gatekeeper " + DecisionLog.num(fee) + " adena)"));
+		return true;
 	}
 
 	/**
@@ -1889,7 +1974,7 @@ public final class ColdLife
 		{
 			final long cash = Math.min(ColdEconomy.MAX_ADENA, adena + sold);
 			final long budget = upgradeBudget(bot, cash, context);
-			final List<LivingGear.Offer> offers = withCrafted(offersIn(shop, town), workshop, town, shop);
+			final List<LivingGear.Offer> offers = withCrafted(offersIn(shop, town), bot, workshop, town, shop);
 			final List<LivingGear.Change> bought = LivingGear.shop(gear, fit, bot.getLevel(), budget, offers, shop.items(), locked);
 			if (bought.isEmpty())
 			{
@@ -1899,9 +1984,9 @@ public final class ColdLife
 			{
 				adena -= change.price();
 				locked.add(change.slot());
-				if ((workshop != null) && (workshop.gearOnSale(change.piece().itemId()) > 0L) && (change.price() == workshop.gearPrice(change.piece().itemId())))
+				if (workshop != null)
 				{
-					workshop.buyGear(town.name(), change.piece().itemId(), change.price()); // her piece: it leaves her shop and she is paid
+					workshop.gearTrade(bot.getId(), town.name(), change.piece().itemId(), change.price()); // her piece for this hunter: it changes hands and she is paid what it owed
 				}
 				events.add(new DecisionLog.Event(null, "Bought " + LivingGear.describe(change, fit) + (change.shop() ? (" in " + town.name()) : " from another player") + " for " + DecisionLog.num(change.price()) + " adena"));
 				for (int itemId : change.removed())
@@ -1915,7 +2000,7 @@ public final class ColdLife
 				}
 			}
 		}
-		wishFor(bot, town, context, gear, fit);
+		wishFor(bot, town, context, gear, fit, now);
 		if (old.isEmpty() && (adena == bot.getAdena()))
 		{
 			return;
@@ -2159,7 +2244,8 @@ public final class ColdLife
 		{
 			return budget;
 		}
-		return (long) (Math.max(0L, budget - shop.workingCapital()) * Math.max(0.0, Math.min(1.0, shop.upgradeShare())));
+		final GearCrafting.Params params = shop.gearParams();
+		return (params == null) ? budget : (long) (Math.max(0L, budget - params.workingCapital()) * Math.max(0.0, Math.min(1.0, params.upgradeShare())));
 	}
 
 	private static ZoneChooser.Situation situation(ColdBot bot, Zone current, Town town, long budget, long now, Context context)

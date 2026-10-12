@@ -153,6 +153,7 @@ jobs:
             "java/org/l2jmobius/gameserver/livingpop/RaidPlanner.java" \
             "java/org/l2jmobius/gameserver/livingpop/RaidStats.java" \
             "java/org/l2jmobius/gameserver/livingpop/GearCrafting.java" \
+            "java/org/l2jmobius/gameserver/livingpop/GearOrders.java" \
             "java/org/l2jmobius/gameserver/livingpop/ShotDemand.java" \
             tests/java/*.java
           java -cp build/test-classes FakePlayerChatParsingTest

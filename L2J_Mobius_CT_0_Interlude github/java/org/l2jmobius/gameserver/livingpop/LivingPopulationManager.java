@@ -263,12 +263,14 @@ public class LivingPopulationManager
 	 * @param maxCrafts the most crafts one trip makes
 	 * @param demandHours how many hours of shot demand it averages over
 	 * @param maxMarkup how far above its floor price a shot sells while the shop holds none (0.5 = 50% more)
+	 * @param gear how she runs the gear trade, or null for none
+	 * @param isleMinCrafts the fewest crafts of shots that are worth the trip to Devil's Isle
 	 */
-	public record MerchantConfig(ShotCrafting.Prices prices, long craftMs, double hoursOfStock, long maxCrafts, int demandHours, double maxMarkup, boolean gear, long workingCapital, double upgradeShare, long isleMinCrafts)
+	public record MerchantConfig(ShotCrafting.Prices prices, long craftMs, double hoursOfStock, long maxCrafts, int demandHours, double maxMarkup, GearCrafting.Params gear, long isleMinCrafts)
 	{
 		public MerchantConfig(ShotCrafting.Prices prices, long craftMs, double hoursOfStock, long maxCrafts, int demandHours, double maxMarkup)
 		{
-			this(prices, craftMs, hoursOfStock, maxCrafts, demandHours, maxMarkup, false, 0L, 1.0, 0L);
+			this(prices, craftMs, hoursOfStock, maxCrafts, demandHours, maxMarkup, null, 0L);
 		}
 	}
 
@@ -276,7 +278,7 @@ public class LivingPopulationManager
 	public void setMerchant(MerchantConfig merchant)
 	{
 		_merchant = merchant;
-		FakePlayerStoreFactory.setShopkeeperItems(shopkeeperItems()); // only her shops sell the Merchant's shots and gear
+		FakePlayerStoreFactory.setShopkeeperItems(shopkeeperItems()); // only her shops sell the Merchant's shots; gear is traded between her and the hunter, never from a shop
 	}
 
 	private volatile RaidDirector.Config _raidConfig; // null = no raid parties
@@ -290,8 +292,7 @@ public class LivingPopulationManager
 	}
 
 	private final Map<String, Npc> _shopkeepers = new HashMap<>(); // shop name to its phantom, while it stands in the world
-	private final Map<Long, Integer> _gearWishes = new ConcurrentHashMap<>(); // hunter id to the piece it wishes for that the Merchant can craft now
-	private final Map<Integer, Long> _gearPrices = new ConcurrentHashMap<>(); // piece to the price fixed when it was crafted (kept until restart)
+	private final GearOrders _gearOrders = new GearOrders(); // the book of gear orders the hunters and the Merchant share (saved)
 	private volatile List<GearCrafting.Recipe> _gearRecipeList;
 
 	/**
@@ -320,18 +321,6 @@ public class LivingPopulationManager
 				"Giran",
 				"shots",
 				"150"
-			},
-			{
-				GearCrafting.D_SHOP,
-				GearCrafting.D_TOWN,
-				"gear",
-				"-150"
-			},
-			{
-				GearCrafting.C_SHOP,
-				GearCrafting.C_TOWN,
-				"gear",
-				"-150"
 			}
 		})
 		{
@@ -341,24 +330,11 @@ public class LivingPopulationManager
 				continue;
 			}
 			final Set<Integer> items = new HashSet<>();
-			if ("shots".equals(shop[2]))
+			for (ShotCrafting.Recipe recipe : ShotCrafting.RECIPES)
 			{
-				for (ShotCrafting.Recipe recipe : ShotCrafting.RECIPES)
+				if (recipe.shopName().equals(shop[0]))
 				{
-					if (recipe.shopName().equals(shop[0]))
-					{
-						items.add(recipe.shotItemId());
-					}
-				}
-			}
-			else
-			{
-				for (GearCrafting.Recipe recipe : gearRecipeList())
-				{
-					if (recipe.shopName().equals(shop[0]))
-					{
-						items.add(recipe.productId());
-					}
+					items.add(recipe.shotItemId());
 				}
 			}
 			final int offset = Integer.parseInt(shop[3]);
@@ -545,135 +521,87 @@ public class LivingPopulationManager
 		}
 
 		@Override
-		public GearCrafting.Market gearMarket()
+		public GearCrafting.Params gearParams()
 		{
-			return (_config.gear() && (_gear != null)) ? snapshotMarket() : null;
+			return (_gear == null) ? null : _config.gear();
+		}
+
+		@Override
+		public GearCrafting.Market gearMarket(double share)
+		{
+			return (gearParams() == null) ? null : snapshotMarket(share);
 		}
 
 		@Override
 		public List<GearCrafting.Recipe> gearRecipes()
 		{
-			return _config.gear() ? gearRecipeList() : List.of();
+			return (gearParams() == null) ? List.of() : gearRecipeList();
 		}
 
 		@Override
-		public Map<Integer, Double> gearWanted()
+		public void gearWish(long botId, int botLevel, int productId, long budget, long now)
 		{
-			final Map<Integer, Double> wanted = new HashMap<>();
 			final ColdBot merchant = merchantBot();
-			if ((merchant == null) || !_config.gear())
-			{
-				return wanted;
-			}
-			final GearCrafting.Market market = snapshotMarket();
-			for (Integer product : _gearWishes.values())
-			{
-				final GearCrafting.Recipe recipe = gearRecipeOf(product);
-				if ((recipe != null) && GearCrafting.craftable(recipe, merchant.getLevel(), merchant.getGearRecipes(), market))
-				{
-					wanted.merge(product, 1.0, Double::sum);
-				}
-			}
-			return wanted;
-		}
-
-		@Override
-		public long gearOnSale(int productId)
-		{
-			final GearCrafting.Recipe recipe = gearRecipeOf(productId);
-			return (recipe == null) ? 0L : _townStock.count(recipe.saleTown(), productId);
-		}
-
-		@Override
-		public void gearWish(long botId, int productId)
-		{
-			final ColdBot merchant = (productId == 0) ? null : merchantBot();
-			final GearCrafting.Recipe recipe = (merchant == null) ? null : gearRecipeOf(productId);
+			final GearCrafting.Recipe recipe = ((merchant == null) || (gearParams() == null)) ? null : gearRecipeOf(productId);
 			// Only what she can craft now is asked for: a wish nobody can fill is no demand.
-			if ((recipe != null) && GearCrafting.craftable(recipe, merchant.getLevel(), merchant.getGearRecipes(), snapshotMarket()))
+			if ((recipe != null) && GearCrafting.craftable(recipe, merchant.getLevel(), merchant.getGearRecipes(), snapshotMarket(GearCrafting.STOCK_SHARE)))
 			{
-				_gearWishes.put(botId, productId);
+				_gearOrders.wish(botId, botLevel, productId, budget, now);
 			}
 			else
 			{
-				_gearWishes.remove(botId);
+				_gearOrders.clearWish(botId);
 			}
 		}
 
 		@Override
-		public long gearPrice(int productId)
+		public void gearClear(long botId)
 		{
-			final GearCrafting.Recipe recipe = gearRecipeOf(productId);
-			if (recipe == null)
-			{
-				return 0L;
-			}
-			final Long fixed = _gearPrices.get(productId);
-			return (fixed != null) ? fixed : Math.max(0L, GearCrafting.price(recipe, snapshotMarket()));
+			_gearOrders.clearWish(botId);
 		}
 
 		@Override
-		public List<LivingGear.Offer> gearOffers(String town, LivingGear.Items items)
+		public GearOrders.Order gearOrder(long botId)
 		{
-			final List<LivingGear.Offer> offers = new ArrayList<>();
-			final Map<Integer, Long> held = _townStock.totals().get(town);
-			if (held == null)
-			{
-				return offers;
-			}
-			for (Map.Entry<Integer, Long> entry : held.entrySet())
-			{
-				final GearCrafting.Recipe recipe = gearRecipeOf(entry.getKey());
-				final LivingGear.Piece piece = (recipe == null) ? null : items.piece(entry.getKey());
-				final long price = (piece == null) ? 0L : gearPrice(entry.getKey());
-				if ((entry.getValue() > 0L) && (price > 0L))
-				{
-					offers.add(new LivingGear.Offer(piece, price, true));
-				}
-			}
-			return offers;
+			return _gearOrders.of(botId);
 		}
 
 		@Override
-		public boolean buyGear(String town, int productId, long price)
+		public List<GearOrders.Order> gearWishes()
 		{
-			final List<TownStock.Listing> taken = _townStock.take(town, productId, 1);
-			if (taken == null)
-			{
-				return false;
-			}
-			final List<Long> shares = TownStock.shares(taken, price);
-			for (int i = 0; i < taken.size(); i++)
-			{
-				payOwner(taken.get(i).owner(), shares.get(i));
-			}
-			syncShopkeepers();
-			return true;
+			return _gearOrders.wishes();
 		}
 
 		@Override
-		public boolean buyGearMaterials(GearCrafting.Plan plan, Set<Integer> known)
+		public GearOrders.Order gearCrafting()
 		{
-			final GearCrafting.Market market = snapshotMarket();
-			final long price = GearCrafting.price(plan.recipe(), market); // fixed now, before her own buying moves the stock
-			final List<TownStock.Listing> receipts = new ArrayList<>();
+			return _gearOrders.crafting();
+		}
+
+		@Override
+		public List<String> gearAccept(GearOrders.Order wish, GearCrafting.Quote quote, long advance, long craftMs, long now)
+		{
+			final GearCrafting.Recipe recipe = quote.recipe();
+			// The hunter pays its advance first; if it cannot, nothing happens.
+			if ((advance > 0L) && !chargeBot(wish.botId(), advance))
+			{
+				return null;
+			}
+			final List<String> towns = new ArrayList<>();
+			final GearCrafting.Market market = snapshotMarket(quote.share());
 			final Map<Integer, Long> needs = new HashMap<>();
-			plan.recipe().ingredients().forEach((item, count) -> needs.merge(item, count * plan.crafts(), Long::sum));
-			if (plan.recipeCost() > 0L)
+			recipe.ingredients().forEach((item, count) -> needs.merge(item, (long) count, Long::sum));
+			if (quote.recipeCost() > 0L)
 			{
-				needs.merge(plan.recipe().recipeItemId(), 1L, Long::sum);
+				needs.merge(recipe.recipeItemId(), 1L, Long::sum);
 			}
+			final List<TownStock.Listing> receipts = new ArrayList<>();
 			for (Map.Entry<Integer, Long> need : needs.entrySet())
 			{
 				final GearCrafting.Cost cost = GearCrafting.cost(need.getKey(), need.getValue(), market);
-				if (cost == null)
-				{
-					_townStock.restore(receipts);
-					return false;
-				}
-				long left = cost.fromStock();
-				final long unit = GearCrafting.stockPrice(market.referencePrice(need.getKey()));
-				for (Map.Entry<String, Map<Integer, Long>> town : _townStock.totals().entrySet())
+				boolean ok = cost != null;
+				long left = ok ? cost.fromStock() : 0L;
+				for (Map.Entry<String, Map<Integer, Long>> town : ok ? _townStock.totals().entrySet() : Map.<String, Map<Integer, Long>>of().entrySet())
 				{
 					final long here = Math.min(left, town.getValue().getOrDefault(need.getKey(), 0L));
 					if (here < 1L)
@@ -685,23 +613,81 @@ public class LivingPopulationManager
 					{
 						receipts.addAll(taken);
 						left -= here;
+						if (!towns.contains(town.getKey()))
+						{
+							towns.add(town.getKey());
+						}
 					}
 				}
-				if ((left > 0L) && (market.vendorPrice(need.getKey()) <= 0L))
+				ok &= (left <= 0L) || (market.vendorPrice(need.getKey()) > 0L);
+				if (!ok)
 				{
-					_townStock.restore(receipts); // the stock moved since it planned, and no vendor makes up the rest
-					return false;
+					_townStock.restore(receipts); // the stock moved since she planned: nothing is bought
+					if (advance > 0L)
+					{
+						payOwner(wish.botId(), advance);
+					}
+					return null;
 				}
 			}
 			// Everything is in hand: the owners of what came out of the stock are paid their share of the reference price.
 			for (TownStock.Listing taken : receipts)
 			{
-				payOwner(taken.owner(), taken.count() * GearCrafting.stockPrice(market.referencePrice(taken.itemId())));
+				payOwner(taken.owner(), taken.count() * GearCrafting.stockPrice(market.referencePrice(taken.itemId()), quote.share()));
 			}
-			if (price > 0L)
+			if (towns.isEmpty())
 			{
-				_gearPrices.put(plan.recipe().productId(), price);
+				towns.add(GearCrafting.C_TOWN); // everything came from the vendors: one stop at the shops in Giran
 			}
+			_gearOrders.accept(wish.botId(), quote.price(), advance, craftMs, towns.get(towns.size() - 1), now);
+			return towns;
+		}
+
+		@Override
+		public void gearReady(long botId, String town, long now)
+		{
+			final GearOrders.Order order = _gearOrders.ready(botId, town, now);
+			final ColdBot merchant = merchantBot();
+			if ((order != null) && (merchant != null))
+			{
+				final GearCrafting.Recipe recipe = gearRecipeOf(order.productId());
+				// The piece is parked in the town's stock under her name; extra pieces of a craft stay for later orders.
+				_townStock.add(town, merchant.getId(), order.productId(), (recipe == null) ? 1L : recipe.perCraft());
+			}
+		}
+
+		@Override
+		public List<LivingGear.Offer> gearOffers(long botId, String town, LivingGear.Items items)
+		{
+			final GearOrders.Order order = _gearOrders.of(botId);
+			if ((order == null) || (order.state() != GearOrders.State.READY) || !town.equals(order.town()) || (_townStock.count(town, order.productId()) < 1L))
+			{
+				return List.of();
+			}
+			final LivingGear.Piece piece = items.piece(order.productId());
+			return (piece == null) ? List.of() : List.of(new LivingGear.Offer(piece, Math.max(1L, order.due()), true));
+		}
+
+		@Override
+		public boolean gearTrade(long botId, String town, int productId, long paid)
+		{
+			final GearOrders.Order order = _gearOrders.of(botId);
+			if ((order == null) || (order.state() != GearOrders.State.READY) || (order.productId() != productId) || !town.equals(order.town()))
+			{
+				return false;
+			}
+			// One transfer: the piece leaves the stock, she is paid what it owed, the order is closed. If the piece is not there, nothing changes.
+			final List<TownStock.Listing> taken = _townStock.take(town, productId, 1);
+			if (taken == null)
+			{
+				return false;
+			}
+			final List<Long> shares = TownStock.shares(taken, Math.max(0L, paid));
+			for (int i = 0; i < taken.size(); i++)
+			{
+				payOwner(taken.get(i).owner(), shares.get(i));
+			}
+			_gearOrders.remove(botId);
 			return true;
 		}
 
@@ -709,18 +695,6 @@ public class LivingPopulationManager
 		public long isleMinCrafts()
 		{
 			return _config.isleMinCrafts();
-		}
-
-		@Override
-		public long workingCapital()
-		{
-			return _config.workingCapital();
-		}
-
-		@Override
-		public double upgradeShare()
-		{
-			return _config.upgradeShare();
 		}
 	}
 
@@ -738,7 +712,7 @@ public class LivingPopulationManager
 	}
 
 	/** @return what the towns hold and charge now, read once so a decision sees one consistent world */
-	private GearCrafting.Market snapshotMarket()
+	private GearCrafting.Market snapshotMarket(double share)
 	{
 		final Map<Integer, Long> held = new HashMap<>();
 		for (Map<Integer, Long> town : _townStock.totals().values())
@@ -748,6 +722,12 @@ public class LivingPopulationManager
 		final GearCatalog gear = _gear;
 		return new GearCrafting.Market()
 		{
+			@Override
+			public double stockShare()
+			{
+				return share;
+			}
+
 			@Override
 			public long inStock(int itemId)
 			{
@@ -800,7 +780,7 @@ public class LivingPopulationManager
 			}
 			if (priced && !ingredients.isEmpty())
 			{
-				list.add(new GearCrafting.Recipe(recipe.getRecipeId(), product.getId(), Math.max(1, recipe.getCount()), Map.copyOf(ingredients), product.getCrystalType().ordinal()));
+				list.add(new GearCrafting.Recipe(recipe.getRecipeId(), product.getId(), Math.max(1, recipe.getCount()), Map.copyOf(ingredients), product.getCrystalType().ordinal(), recipe.getLevel()));
 			}
 		}
 		list = List.copyOf(list);
@@ -823,7 +803,7 @@ public class LivingPopulationManager
 		return null;
 	}
 
-	/** @return the items only the Merchant's shops sell, and that the town clearing leaves alone: her shots and her gear */
+	/** @return the items no crowd vendor sells: the Merchant's shots, and the gear she parks for a hunter */
 	private Set<Integer> shopkeeperItems()
 	{
 		if (_merchant == null)
@@ -831,7 +811,7 @@ public class LivingPopulationManager
 			return Set.of();
 		}
 		final Set<Integer> items = new HashSet<>(SHOT_ITEMS);
-		if (_merchant.gear())
+		if (_merchant.gear() != null)
 		{
 			for (GearCrafting.Recipe recipe : gearRecipeList())
 			{
@@ -839,6 +819,83 @@ public class LivingPopulationManager
 			}
 		}
 		return items;
+	}
+
+	/** @return the items the town clearing leaves alone: the Merchant's shots and parked gear, and every crafting reagent and recipe (they are never vendored, for now) */
+	private Set<Integer> keepItems()
+	{
+		final Set<Integer> items = new HashSet<>(shopkeeperItems());
+		if ((_merchant != null) && (_merchant.gear() != null))
+		{
+			for (GearCrafting.Recipe recipe : gearRecipeList())
+			{
+				items.add(recipe.recipeItemId());
+				items.addAll(recipe.ingredients().keySet());
+			}
+		}
+		return items;
+	}
+
+	/** Takes adena from a bot, whether it has a live character or is on its row. @return false when it does not have that much */
+	private boolean chargeBot(long id, long adena)
+	{
+		if (_handoff.chargeHot(id, adena))
+		{
+			return true;
+		}
+		for (ColdBot bot : _bots)
+		{
+			if (bot.getId() == id)
+			{
+				synchronized (bot)
+				{
+					if (bot.getAdena() < adena)
+					{
+						return false;
+					}
+					bot.setAdena(bot.getAdena() - adena);
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Drops the orders that went stale: a wish nobody refreshed, a craft whose trip was lost, and a finished piece nobody came
+	 * for (the hunter gets its advance back; the piece goes to a vendor at half its reference price, paid to the Merchant).
+	 */
+	private void expireGearOrders()
+	{
+		final GearCrafting.Params params = (_merchant == null) ? null : _merchant.gear();
+		if (params == null)
+		{
+			return;
+		}
+		final ColdBot merchant = merchantBot();
+		for (GearOrders.Order gone : _gearOrders.expire(System.currentTimeMillis(), params.wishMs(), params.readyMs(), 24L * 3_600_000L))
+		{
+			if (gone.state() == GearOrders.State.WISH)
+			{
+				continue;
+			}
+			if (gone.advance() > 0L)
+			{
+				payOwner(gone.botId(), gone.advance());
+				if (merchant != null)
+				{
+					synchronized (merchant)
+					{
+						merchant.setAdena(Math.max(0L, merchant.getAdena() - gone.advance()));
+					}
+				}
+			}
+			if ((gone.state() == GearOrders.State.READY) && (gone.town() != null) && (_townStock.take(gone.town(), gone.productId(), 1) != null) && (merchant != null))
+			{
+				final ItemTemplate item = ItemData.getInstance().getTemplate(gone.productId());
+				payOwner(merchant.getId(), (item == null) ? 0L : Math.max(0L, item.getReferencePrice() / 2L));
+			}
+		}
 	}
 
 	/**
@@ -855,23 +912,6 @@ public class LivingPopulationManager
 		}
 		final double wanted = _shotDemand.perHour(recipe.saleTown(), itemId, merchant.demandHours(), System.currentTimeMillis()).wanted();
 		return MerchantPlanner.price(ShotCrafting.floorPrice(recipe, merchant.prices()), _townStock.count(recipe.saleTown(), itemId), wanted * merchant.hoursOfStock(), merchant.maxMarkup());
-	}
-
-	/** @return the unit price a Merchant's item sells at in a shop: a shot's floor, a piece of gear's price; 0 for any other item */
-	private long shopFloor(int itemId)
-	{
-		final long shot = shotFloor(itemId);
-		if (shot > 0L)
-		{
-			return shot;
-		}
-		final GearCrafting.Recipe recipe = (_merchant != null) && _merchant.gear() ? gearRecipeOf(itemId) : null;
-		if (recipe == null)
-		{
-			return 0L;
-		}
-		final Long fixed = _gearPrices.get(itemId);
-		return (fixed != null) ? fixed : Math.max(0L, GearCrafting.price(recipe, snapshotMarket()));
 	}
 
 	public void setBlessedSpiritshots(double damage, double share)
@@ -1027,13 +1067,14 @@ public class LivingPopulationManager
 
 		_stockSaving = _townStockDao.load(_townStock);
 		loadShotDemand();
+		loadGearOrders();
 		_raids = (_raidConfig == null) ? null : new RaidDirector(_random, _raidConfig);
 		_raidBossesLoaded = false;
 		loadRaidTimers();
 		loadRaidStats();
 		_handoff.setTownStock(_townStock);
 		_lastStockSweep = System.currentTimeMillis(); // downtime does not clear stock
-		FakePlayerStoreFactory.setSupply(new TownShops(_townStock, () -> (_catalog == null) ? List.of() : _catalog.towns(), this::payOwner, this::shopFloor));
+		FakePlayerStoreFactory.setSupply(new TownShops(_townStock, () -> (_catalog == null) ? List.of() : _catalog.towns(), this::payOwner, this::shotFloor));
 		_dao.ensureColumns(); // add columns a newer module version needs to an older table (no manual migration)
 		final long now = System.currentTimeMillis();
 		final List<ColdBot> loaded = _dao.loadAll();
@@ -1144,6 +1185,7 @@ public class LivingPopulationManager
 			_townStockDao.save(_townStock);
 		}
 		saveShotDemand();
+		saveGearOrders();
 		saveRaidTimers();
 		saveRaidStats();
 		// Clear in-memory state so a later start() reloads cleanly instead of double-loading the population.
@@ -2274,9 +2316,11 @@ public class LivingPopulationManager
 			}
 			Files.write(path, json.getBytes(StandardCharsets.UTF_8));
 			sweepTownStock();
+			expireGearOrders();
 			syncShopkeepers();
 			saveTownStock();
 			saveShotDemand();
+			saveGearOrders();
 			if ((_raids != null) && _raids.dirty())
 			{
 				saveRaidTimers();
@@ -2323,7 +2367,7 @@ public class LivingPopulationManager
 			return;
 		}
 		final double hours = (now - last) / 3_600_000.0;
-		for (TownStock.Listing gone : _townStock.decay(1.0 - Math.pow(0.5, hours / _stockHalfLifeHours), _random, shopkeeperItems()))
+		for (TownStock.Listing gone : _townStock.decay(1.0 - Math.pow(0.5, hours / _stockHalfLifeHours), _random, keepItems()))
 		{
 			final ItemTemplate item = ItemData.getInstance().getTemplate(gone.itemId());
 			payOwner(gone.owner(), gone.count() * ((item == null) ? 0L : Math.max(0L, item.getReferencePrice() / 2L)));
@@ -2648,6 +2692,44 @@ public class LivingPopulationManager
 		catch (Exception e)
 		{
 			LOGGER.log(Level.WARNING, "LivingPopulation: could not read the shot demand file: " + e.getMessage(), e);
+		}
+	}
+
+	private Path gearOrdersFile()
+	{
+		return Path.of(_config.snapshotFile()).resolveSibling("LivingPopulation-gearorders.txt");
+	}
+
+	private void loadGearOrders()
+	{
+		try
+		{
+			final Path file = gearOrdersFile();
+			if (Files.exists(file))
+			{
+				_gearOrders.decode(Files.readString(file, StandardCharsets.UTF_8));
+			}
+		}
+		catch (Exception e)
+		{
+			LOGGER.log(Level.WARNING, "LivingPopulation: could not read the gear orders file: " + e.getMessage(), e);
+		}
+	}
+
+	private void saveGearOrders()
+	{
+		try
+		{
+			final Path file = gearOrdersFile();
+			if (file.getParent() != null)
+			{
+				Files.createDirectories(file.getParent());
+			}
+			Files.write(file, _gearOrders.encode().getBytes(StandardCharsets.UTF_8));
+		}
+		catch (Exception e)
+		{
+			LOGGER.log(Level.WARNING, "LivingPopulation: could not save the gear orders: " + e.getMessage(), e);
 		}
 	}
 
