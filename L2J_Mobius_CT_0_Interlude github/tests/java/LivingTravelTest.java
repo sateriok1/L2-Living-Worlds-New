@@ -32,6 +32,8 @@ import org.l2jmobius.gameserver.livingpop.ColdLife;
 import org.l2jmobius.gameserver.livingpop.ColdRisk;
 import org.l2jmobius.gameserver.livingpop.DecisionLog;
 import org.l2jmobius.gameserver.livingpop.DropYield;
+import org.l2jmobius.gameserver.livingpop.MerchantPlanner;
+import org.l2jmobius.gameserver.livingpop.ShotCrafting;
 import org.l2jmobius.gameserver.livingpop.ShotDemand;
 import org.l2jmobius.gameserver.livingpop.TownStock;
 import org.l2jmobius.gameserver.livingpop.GoalPlanner;
@@ -86,6 +88,7 @@ public class LivingTravelTest
 		testDropYield();
 		testTownStock();
 		testShotDemand();
+		testMerchant();
 		testLootSale();
 		testColdRisk();
 		testColdDeathAndRest();
@@ -501,6 +504,145 @@ public class LivingTravelTest
 	}
 
 	private static final long HOUR = 3_600_000L;
+
+	private static final String MERCHANT_XML = "<zones>" //
+		+ "<town name=\"Giran\" x=\"0\" y=\"0\" z=\"0\"><gatekeeper npcId=\"1\" x=\"100\" y=\"0\" z=\"0\"/><grocer npcId=\"2\" x=\"0\" y=\"100\" z=\"0\"/><route town=\"Gludio\" fee=\"1000\"/></town>" //
+		+ "<town name=\"Gludio\" x=\"100000\" y=\"0\" z=\"0\"><gatekeeper npcId=\"3\" x=\"100100\" y=\"0\" z=\"0\"/><grocer npcId=\"4\" x=\"100000\" y=\"100\" z=\"0\"/><route town=\"Giran\" fee=\"1000\"/></town>" //
+		+ "<zone name=\"Hunt\" minLevel=\"15\" maxLevel=\"50\"><teleport town=\"Giran\" x=\"5000\" y=\"0\" z=\"0\" fee=\"500\"/><teleport town=\"Gludio\" x=\"105000\" y=\"0\" z=\"0\" fee=\"500\"/><spot x=\"5200\" y=\"0\" z=\"0\"/></zone>" //
+		+ "<zone name=\"Devil's Isle\" minLevel=\"43\" maxLevel=\"48\"><teleport town=\"Giran\" x=\"43408\" y=\"206881\" z=\"-3752\" fee=\"5700\"/><spot x=\"44926\" y=\"206189\" z=\"-3711\"/></zone>" //
+		+ "</zones>";
+
+	private static void testMerchant() throws Exception
+	{
+		final ShotCrafting.Prices prices = ShotCrafting.Prices.standard();
+		final ShotCrafting.Recipe ssD = ShotCrafting.byShot(1463);
+		final ShotCrafting.Recipe ssC = ShotCrafting.byShot(1464);
+		final ShotCrafting.Recipe bspsD = ShotCrafting.byShot(3948);
+		final ShotCrafting.Recipe bspsC = ShotCrafting.byShot(3949);
+		check("a craft costs its ore plus its crystals", (ShotCrafting.craftCost(ssD, prices) == 1421L) && (ShotCrafting.craftCost(ssC, prices) == 6924L) && (ShotCrafting.craftCost(bspsD, prices) == 4712L) && (ShotCrafting.craftCost(bspsC, prices) == 18798L));
+		check("a shot costs 9.1, 14.5, 47.1 and 94.0", Math.abs(ShotCrafting.unitCost(ssD, prices) - 9.109) < 0.01 && Math.abs(ShotCrafting.unitCost(ssC, prices) - 14.546) < 0.01 && Math.abs(ShotCrafting.unitCost(bspsD, prices) - 47.12) < 0.01 && Math.abs(ShotCrafting.unitCost(bspsC, prices) - 93.99) < 0.01);
+		check("it never sells below cost plus 1 adena", (ShotCrafting.floorPrice(ssD, prices) == 11L) && (ShotCrafting.floorPrice(ssC, prices) == 16L) && (ShotCrafting.floorPrice(bspsD, prices) == 49L) && (ShotCrafting.floorPrice(bspsC, prices) == 95L));
+		check("D shots sell in Gludio, C shots in Giran", "Gludio".equals(ssD.saleTown()) && "Gludio".equals(bspsD.saleTown()) && "Giran".equals(ssC.saleTown()) && "Giran".equals(bspsC.saleTown()));
+
+		final int all = ShotCrafting.bit(ssD) | ShotCrafting.bit(ssC) | ShotCrafting.bit(bspsD) | ShotCrafting.bit(bspsC);
+		final Map<Integer, Double> wanted = Map.of(1463, 1000.0, 1464, 500.0, 3948, 100.0, 3949, 50.0);
+		final MerchantPlanner.Plan plan = MerchantPlanner.decide(all, 45, wanted, Map.of(), 2.0, 100L, 10_000_000L, prices);
+		check("D demand is covered before C", plan.recipe() == ssD);
+		check("a batch covers the hours of demand it keeps", (plan.crafts() == 13L) && (plan.shots() == 2028L) && (plan.cost() == 13L * 1421L));
+		check("shots already on sale count against the gap", MerchantPlanner.decide(ssD == null ? 0 : ShotCrafting.bit(ssD), 45, wanted, Map.of(1463, 1900L), 2.0, 100L, 10_000_000L, prices).crafts() == 1L);
+		check("with D covered it turns to C", MerchantPlanner.decide(all, 45, wanted, Map.of(1463, 5000L, 3948, 5000L), 2.0, 100L, 10_000_000L, prices).recipe() == ssC);
+		check("and nothing when all is covered", MerchantPlanner.decide(all, 45, wanted, Map.of(1463, 5000L, 3948, 5000L, 1464, 5000L, 3949, 5000L), 2.0, 100L, 10_000_000L, prices) == null);
+		check("below level 40 it makes no C shots", MerchantPlanner.decide(ShotCrafting.bit(ssC), 39, wanted, Map.of(), 2.0, 100L, 10_000_000L, prices) == null);
+		check("it crafts what its budget pays for", MerchantPlanner.decide(all, 45, wanted, Map.of(), 2.0, 100L, 3000L, prices).crafts() == 2L);
+		check("a trip makes at most its crafts cap", MerchantPlanner.decide(all, 45, Map.of(1463, 1_000_000.0), Map.of(), 2.0, 100L, 100_000_000L, prices).crafts() == 100L);
+		check("it learns the recipe hunters want most that its level allows", MerchantPlanner.recipeToLearn(0, 25, wanted) == ssD);
+		check("a recipe it knows is not learned again", MerchantPlanner.recipeToLearn(ShotCrafting.bit(ssD), 25, wanted) == bspsD);
+		check("C recipes wait for level 40", MerchantPlanner.recipeToLearn(ShotCrafting.bit(ssD) | ShotCrafting.bit(bspsD), 39, wanted) == null);
+
+		// The trip: buys its materials in Giran, sits on the isle, reads a scroll, sells in Gludio.
+		final ZoneCatalog catalog = ZoneCatalog.parse(MERCHANT_XML);
+		final List<String> listed = new ArrayList<>();
+		final Set<Integer> bought = new HashSet<>();
+		final ColdLife.Workshop workshop = new ColdLife.Workshop()
+		{
+			@Override
+			public ShotCrafting.Prices prices()
+			{
+				return ShotCrafting.Prices.standard();
+			}
+
+			@Override
+			public Map<Integer, Double> wanted()
+			{
+				return Map.of(1463, 1000.0);
+			}
+
+			@Override
+			public long onSale(String town, int shotItemId)
+			{
+				return 0L;
+			}
+
+			@Override
+			public String recipeTown(int recipeItemId, String preferred)
+			{
+				return (recipeItemId == 1804) && !bought.contains(1804) ? "Giran" : null;
+			}
+
+			@Override
+			public long recipePrice(int recipeItemId)
+			{
+				return 5000L;
+			}
+
+			@Override
+			public boolean buyRecipe(String town, int recipeItemId, long price)
+			{
+				return bought.add(recipeItemId);
+			}
+
+			@Override
+			public void list(String town, long owner, int shotItemId, long count)
+			{
+				listed.add(town + ":" + owner + ":" + shotItemId + ":" + count);
+			}
+
+			@Override
+			public long craftMs()
+			{
+				return 30 * 60_000L;
+			}
+
+			@Override
+			public double hoursOfStock()
+			{
+				return 2.0;
+			}
+
+			@Override
+			public long maxCrafts()
+			{
+				return 100L;
+			}
+		};
+		final ColdLife.Params travel = new ColdLife.Params(100.0, 20_000L, 10_000L, 0, 60_000L, 60_000L, 4.0, 8, 300_000L, 2500.0, 6.0, 40);
+		final ColdLife.Context context = new ColdLife.Context(catalog, supply(), travel, (level, tier) -> prices(), new HashMap<>(), new Random(7), null, level -> 0L, null, null, null, null, workshop);
+		final ColdBot merchant = bot(25, "Hunt", 100_000L, 10L, 2L, 0);
+		merchant.setClassId(56);
+		merchant.setName("Sateya");
+		merchant.setTown("Giran");
+		merchant.setActivity(ColdLife.IN_TOWN);
+		merchant.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		final List<DecisionLog.Event> log = new ArrayList<>();
+		long now = runUntil(merchant, 1L, context, log, b -> ColdLife.CRAFTING.equals(b.getActivity()));
+		check("Sateya changes class to Artisan, whatever its id", (ClassPath.next(53, 1L, "Sateya") == 56) && (ClassPath.next(53, 1L, "Other") != -1));
+		check("it learned the recipe from the town's stock", (merchant.getRecipes() & ShotCrafting.bit(ssD)) != 0);
+		check("it carries the shots it will craft to Gludio", (merchant.getCarryItem() == 1463) && (merchant.getCarryCount() == 2028L) && "Gludio".equals(merchant.getCarryTown()));
+		check("it sits on Devil's Isle for the half hour", ColdLife.CRAFTING.equals(merchant.getActivity()) && (merchant.getLeg().durationMs() == 30 * 60_000L) && (merchant.getX() == 43408));
+		check("the gatekeeper to the isle is free at its level", merchant.getAdena() <= (100_000L - 5000L - 18_473L));
+		final long escapes = merchant.getEscapes();
+		now = runUntil(merchant, now, context, log, b -> ColdLife.DELIVERING.equals(b.getActivity()));
+		check("it read a Scroll of Escape to leave", merchant.getEscapes() == (escapes - 1L));
+		check("it heads to Gludio to sell", "Gludio".equals(merchant.getTown()) && listed.isEmpty());
+		runUntil(merchant, now, context, log, b -> !ColdLife.DELIVERING.equals(b.getActivity()));
+		check("the shots go on sale in Gludio under its id", listed.equals(List.of("Gludio:1:1463:2028")) && (merchant.getCarryCount() == 0L));
+		check("then it goes back to hunting", ColdLife.TO_ZONE.equals(merchant.getActivity()));
+
+		final ColdBot warrior = bot(25, "Hunt", 100_000L, 10L, 2L, 0);
+		warrior.setClassId(56); // an Artisan too, but not the Merchant
+		warrior.setTown("Giran");
+		warrior.setActivity(ColdLife.IN_TOWN);
+		warrior.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		runUntil(warrior, 1L, context, new ArrayList<>(), b -> !ColdLife.IN_TOWN.equals(b.getActivity()));
+		check("an Artisan that is not Sateya does not craft", !ColdLife.CRAFTING.equals(warrior.getActivity()) && (warrior.getRecipes() == 0));
+
+		final ColdBot saved = new ColdBot();
+		saved.setStatsJson(merchant.getStatsJson());
+		merchant.setCarry(1463, 500L, "Gludio");
+		merchant.setRecipes(5);
+		saved.setStatsJson(merchant.getStatsJson());
+		check("its recipes and the shots it carries are saved", (saved.getRecipes() == 5) && (saved.getCarryItem() == 1463) && (saved.getCarryCount() == 500L) && "Gludio".equals(saved.getCarryTown()));
+	}
 
 	private static void testShotDemand()
 	{

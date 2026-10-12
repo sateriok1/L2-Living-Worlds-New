@@ -60,6 +60,11 @@ public final class LivingChat
 				return "doing your class change" + inTown;
 			case ColdLife.TRAINER:
 				return "learning new skills at the trainer" + inTown;
+			case ColdLife.CRAFTING:
+				return "sitting on Devil's Isle crafting shots";
+			case ColdLife.CRAFT_RETURN:
+			case ColdLife.DELIVERING:
+				return "taking the shots I crafted to my shop";
 			default:
 				return "hunting" + inZone;
 		}

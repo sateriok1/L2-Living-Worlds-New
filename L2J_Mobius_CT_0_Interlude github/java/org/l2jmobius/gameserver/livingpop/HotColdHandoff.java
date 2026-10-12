@@ -585,7 +585,7 @@ public class HotColdHandoff
 			{
 				phantoms.livingCastEscape(player, (int) Math.min(Integer.MAX_VALUE, leg.durationMs())); // reads the scroll again
 			}
-			if (ColdLife.AFK.equals(activity) || ColdLife.RESTING.equals(activity) || ColdLife.DEAD.equals(activity))
+			if (ColdLife.AFK.equals(activity) || ColdLife.RESTING.equals(activity) || ColdLife.DEAD.equals(activity) || ColdLife.CRAFTING.equals(activity))
 			{
 				phantoms.livingSit(player, true); // AFK, resting, or back on its feet in town after dying while cold
 			}
@@ -668,7 +668,7 @@ public class HotColdHandoff
 		boolean teleported = false;
 		if (!after.equals(before))
 		{
-			if (ColdLife.ESCAPING.equals(before) || ColdLife.TO_TOWN.equals(before))
+			if (ColdLife.ESCAPING.equals(before) || ColdLife.TO_TOWN.equals(before) || ColdLife.CRAFT_RETURN.equals(before) || ColdLife.DELIVERING.equals(before) || ColdLife.CRAFTING.equals(after))
 			{
 				// The cast is over, or the gatekeeper was paid: appear at the town's arrival point (the row already moved there).
 				phantoms.livingTeleport(player, bot.getX(), bot.getY(), bot.getZ());
@@ -683,6 +683,24 @@ public class HotColdHandoff
 					break;
 				}
 				case ColdLife.WALKING_TO_TOWN:
+				{
+					phantoms.setLivingIdle(player, true);
+					break;
+				}
+				case ColdLife.CRAFTING:
+				{
+					phantoms.setLivingIdle(player, true);
+					phantoms.livingSit(player, true); // sits on the isle while its materials turn into shots
+					break;
+				}
+				case ColdLife.CRAFT_RETURN:
+				{
+					phantoms.setLivingIdle(player, true);
+					phantoms.livingSit(player, false);
+					phantoms.livingCastEscape(player, (int) Math.min(Integer.MAX_VALUE, (leg == null) ? 0L : leg.durationMs()));
+					break;
+				}
+				case ColdLife.DELIVERING:
 				{
 					phantoms.setLivingIdle(player, true);
 					break;

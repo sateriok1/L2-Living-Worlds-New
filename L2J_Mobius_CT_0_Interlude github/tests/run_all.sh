@@ -86,6 +86,8 @@ PROD_SOURCES=(
 	"java/org/l2jmobius/gameserver/livingpop/DropYield.java"
 	"java/org/l2jmobius/gameserver/livingpop/TownStock.java"
 	"java/org/l2jmobius/gameserver/livingpop/ShotDemand.java"
+	"java/org/l2jmobius/gameserver/livingpop/ShotCrafting.java"
+	"java/org/l2jmobius/gameserver/livingpop/MerchantPlanner.java"
 	"java/org/l2jmobius/gameserver/livingpop/ColdRisk.java"
 	"java/org/l2jmobius/gameserver/livingpop/ClassPath.java"
 	"java/org/l2jmobius/gameserver/livingpop/SkillPlanner.java"

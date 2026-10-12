@@ -134,6 +134,25 @@ public final class ShotDemand
 		return rates;
 	}
 
+	/**
+	 * @param itemId a shot item
+	 * @param hours how many hours to average over
+	 * @param nowMs now
+	 * @return the average shots per hour that every town's hunters fired and wanted, together
+	 */
+	public synchronized Rate everywhere(int itemId, int hours, long nowMs)
+	{
+		double fired = 0.0;
+		double wanted = 0.0;
+		for (String town : towns())
+		{
+			final Rate rate = perHour(town, itemId, hours, nowMs);
+			fired += rate.fired();
+			wanted += rate.wanted();
+		}
+		return new Rate(fired, wanted);
+	}
+
 	/** @return the towns that have recorded anything */
 	public synchronized List<String> towns()
 	{

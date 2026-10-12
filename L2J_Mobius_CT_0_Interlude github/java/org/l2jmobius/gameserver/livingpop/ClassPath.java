@@ -202,6 +202,16 @@ public final class ClassPath
 	 * @param botId its id
 	 * @return the next class, or -1 when there is none
 	 */
+	public static int next(int classId, long botId, String name)
+	{
+		// The Merchant is a dwarf who becomes an Artisan, then a Warsmith.
+		if (ShotCrafting.MERCHANT.equalsIgnoreCase(name) && (classId == 53))
+		{
+			return 56;
+		}
+		return next(classId, botId);
+	}
+
 	public static int next(int classId, long botId)
 	{
 		final List<Integer> options = NEXT.getOrDefault(classId, List.of());

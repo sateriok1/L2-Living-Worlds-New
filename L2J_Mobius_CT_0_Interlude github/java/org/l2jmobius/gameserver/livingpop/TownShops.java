@@ -21,6 +21,7 @@ package org.l2jmobius.gameserver.livingpop;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.IntToLongFunction;
 import java.util.function.Supplier;
 
 import org.l2jmobius.gameserver.managers.FakePlayerStoreSupply;
@@ -38,6 +39,7 @@ public final class TownShops implements FakePlayerStoreSupply
 	private final TownStock _stock;
 	private final Supplier<List<ZoneCatalog.Town>> _towns;
 	private final PayOwner _pay;
+	private final IntToLongFunction _floor;
 
 	/** Pays a bot: the owner's id and the adena. */
 	@FunctionalInterface
@@ -53,9 +55,21 @@ public final class TownShops implements FakePlayerStoreSupply
 	 */
 	public TownShops(TownStock stock, Supplier<List<ZoneCatalog.Town>> towns, PayOwner pay)
 	{
+		this(stock, towns, pay, itemId -> 0L);
+	}
+
+	/**
+	 * @param stock the town stock
+	 * @param towns the towns, for finding the nearest one to a shop
+	 * @param pay pays an owner
+	 * @param floor the lowest unit price an item sells at (the Merchant's production cost plus 1), or 0 for the store's own pricing
+	 */
+	public TownShops(TownStock stock, Supplier<List<ZoneCatalog.Town>> towns, PayOwner pay, IntToLongFunction floor)
+	{
 		_stock = stock;
 		_towns = towns;
 		_pay = pay;
+		_floor = floor;
 	}
 
 	@Override
@@ -66,7 +80,7 @@ public final class TownShops implements FakePlayerStoreSupply
 		final List<Offer> offers = new ArrayList<>();
 		if (items != null)
 		{
-			items.forEach((itemId, count) -> offers.add(new Offer(itemId, (int) Math.min(Integer.MAX_VALUE, count), town)));
+			items.forEach((itemId, count) -> offers.add(new Offer(itemId, (int) Math.min(Integer.MAX_VALUE, count), town, _floor.applyAsLong(itemId))));
 		}
 		return offers;
 	}

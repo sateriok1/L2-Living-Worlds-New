@@ -24,6 +24,7 @@ import org.l2jmobius.gameserver.config.PlayerConfig;
 import org.l2jmobius.gameserver.handler.IVoicedCommandHandler;
 import org.l2jmobius.gameserver.livingpop.LivingPopulationConfig;
 import org.l2jmobius.gameserver.livingpop.LivingPopulationManager;
+import org.l2jmobius.gameserver.livingpop.ShotCrafting;
 import org.l2jmobius.gameserver.livingpop.TravelConfig;
 import org.l2jmobius.gameserver.livingpop.ZoneCombat;
 import org.l2jmobius.gameserver.model.actor.Player;
@@ -164,6 +165,9 @@ public class LivingPopulationModule implements GameModule
 		LivingPopulationManager.getInstance().setRotationWindow(context.config().getInt("ZoneRotationWindowSeconds", 60));
 		LivingPopulationManager.getInstance().setShotModel(context.config().getBoolean("ShotsFromHits", true), context.config().getDouble("MeleeAttackSeconds", 1.4), context.config().getDouble("BowAttackSeconds", 2.4), context.config().getDouble("CastSeconds", 2.2));
 		LivingPopulationManager.getInstance().setTownStockHalfLife(context.config().getDouble("TownStockHalfLifeHours", 6.0));
+		LivingPopulationManager.getInstance().setMerchant(context.config().getBoolean("MerchantCrafting", true)
+			? new LivingPopulationManager.MerchantConfig(new ShotCrafting.Prices(context.config().getLong("MerchantSoulOrePrice", 275L), context.config().getLong("MerchantSpiritOrePrice", 440L), context.config().getLong("MerchantDCrystalCost", 596L), context.config().getLong("MerchantCCrystalCost", 2799L)), Math.max(1, context.config().getInt("MerchantCraftMinutes", 30)) * 60_000L, Math.max(0.1, context.config().getDouble("MerchantHoursOfStock", 2.0)), Math.max(1L, context.config().getLong("MerchantMaxCrafts", 100L)), Math.max(1, context.config().getInt("MerchantDemandHours", 6)))
+			: null);
 		LivingPopulationManager.getInstance().setSelfHeal(context.config().getBoolean("SelfHeal", true));
 		LivingPopulationManager.getInstance().setStartingBuffs(context.config().getBoolean("StartingBuffs", true));
 		LivingPopulationManager.getInstance().setRestAndEvasion(context.config().getBoolean("ZoneRest", true), context.config().getBoolean("ZoneEvasion", true));

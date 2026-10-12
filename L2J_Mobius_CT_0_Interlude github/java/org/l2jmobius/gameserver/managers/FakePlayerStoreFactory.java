@@ -789,7 +789,7 @@ public class FakePlayerStoreFactory
 			final ItemTemplate item = ItemData.getInstance().getTemplate(offer.itemId());
 			if ((item != null) && (offer.count() > 0))
 			{
-				stock.add(new FakePlayerStoreItem(STORE_ITEM_OID.getAndIncrement(), item.getId(), 0, offer.count(), priced(effRef(item.getReferencePrice()), 1.0, 1.4), offer.source()));
+				stock.add(new FakePlayerStoreItem(STORE_ITEM_OID.getAndIncrement(), item.getId(), 0, offer.count(), (int) Math.min(Integer.MAX_VALUE, Math.max(offer.minPrice(), priced(effRef(item.getReferencePrice()), 1.0, 1.4))), offer.source()));
 			}
 		}
 		return (stock.size() < MIN_SUPPLY_LINES) ? new ArrayList<>() : stock;

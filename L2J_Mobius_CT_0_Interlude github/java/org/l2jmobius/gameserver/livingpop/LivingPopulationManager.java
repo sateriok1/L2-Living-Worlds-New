@@ -129,6 +129,8 @@ public class LivingPopulationManager
 	private final Map<String, Map<Integer, Double>> _zoneItems = new ConcurrentHashMap<>(); // zone|level|spoiler -> sellable items per kill
 	private final TownStock _townStock = new TownStock(); // the items each town holds (what cold bots hunted and sold there)
 	private final TownStockDao _townStockDao = new TownStockDao();
+	private static final Set<Integer> SHOT_ITEMS = Set.of(1463, 1464, 3948, 3949); // a Merchant's shots stay on sale until they sell
+	private volatile MerchantConfig _merchant; // null = Merchants do not craft
 	private final ShotDemand _shotDemand = new ShotDemand(); // shots fired per hour by each town's hunters (what a Merchant produces for)
 	private volatile double _stockHalfLifeHours = 6.0; // unsold town stock: half of it is cleared (paid at the vendor price) in this long
 	private volatile long _lastStockSweep; // when the town stock last cleared, 0 until the first tick
@@ -250,6 +252,131 @@ public class LivingPopulationManager
 		_stockHalfLifeHours = Math.max(0.1, hours);
 	}
 
+	/**
+	 * What the Merchant crafts and sells.
+	 * @param prices what the materials cost
+	 * @param craftMs how long it sits on Devil's Isle
+	 * @param hoursOfStock how many hours of demand a batch covers
+	 * @param maxCrafts the most crafts one trip makes
+	 * @param demandHours how many hours of shot demand it averages over
+	 */
+	public record MerchantConfig(ShotCrafting.Prices prices, long craftMs, double hoursOfStock, long maxCrafts, int demandHours)
+	{
+	}
+
+	/** @param merchant the Merchant's settings, or null for no crafting trips */
+	public void setMerchant(MerchantConfig merchant)
+	{
+		_merchant = merchant;
+	}
+
+	/** The Merchant's view of the world: the town stock, the shot demand and its shop. */
+	private final class MerchantWorkshop implements ColdLife.Workshop
+	{
+		private final MerchantConfig _config;
+
+		MerchantWorkshop(MerchantConfig config)
+		{
+			_config = config;
+		}
+
+		@Override
+		public ShotCrafting.Prices prices()
+		{
+			return _config.prices();
+		}
+
+		@Override
+		public Map<Integer, Double> wanted()
+		{
+			final long now = System.currentTimeMillis();
+			final Map<Integer, Double> wanted = new HashMap<>();
+			for (ShotCrafting.Recipe recipe : ShotCrafting.RECIPES)
+			{
+				wanted.put(recipe.shotItemId(), _shotDemand.perHour(recipe.saleTown(), recipe.shotItemId(), _config.demandHours(), now).wanted());
+			}
+			return wanted;
+		}
+
+		@Override
+		public long onSale(String town, int shotItemId)
+		{
+			return _townStock.count(town, shotItemId);
+		}
+
+		@Override
+		public String recipeTown(int recipeItemId, String preferred)
+		{
+			if (_townStock.count(preferred, recipeItemId) > 0)
+			{
+				return preferred;
+			}
+			for (Map.Entry<String, Map<Integer, Long>> town : _townStock.totals().entrySet())
+			{
+				if (town.getValue().getOrDefault(recipeItemId, 0L) > 0)
+				{
+					return town.getKey();
+				}
+			}
+			return null;
+		}
+
+		@Override
+		public long recipePrice(int recipeItemId)
+		{
+			final ItemTemplate item = ItemData.getInstance().getTemplate(recipeItemId);
+			return (item == null) ? Long.MAX_VALUE : Math.max(1L, item.getReferencePrice());
+		}
+
+		@Override
+		public boolean buyRecipe(String town, int recipeItemId, long price)
+		{
+			final List<TownStock.Listing> taken = _townStock.take(town, recipeItemId, 1);
+			if (taken == null)
+			{
+				return false;
+			}
+			final List<Long> shares = TownStock.shares(taken, price);
+			for (int i = 0; i < taken.size(); i++)
+			{
+				payOwner(taken.get(i).owner(), shares.get(i));
+			}
+			return true;
+		}
+
+		@Override
+		public void list(String town, long owner, int shotItemId, long count)
+		{
+			_townStock.add(town, owner, shotItemId, count);
+		}
+
+		@Override
+		public long craftMs()
+		{
+			return _config.craftMs();
+		}
+
+		@Override
+		public double hoursOfStock()
+		{
+			return _config.hoursOfStock();
+		}
+
+		@Override
+		public long maxCrafts()
+		{
+			return _config.maxCrafts();
+		}
+	}
+
+	/** @return the lowest unit price a shot sells at in a shop (the Merchant's cost plus 1), or 0 for any other item */
+	private long shotFloor(int itemId)
+	{
+		final MerchantConfig merchant = _merchant;
+		final ShotCrafting.Recipe recipe = ShotCrafting.byShot(itemId);
+		return ((merchant == null) || (recipe == null)) ? 0L : ShotCrafting.floorPrice(recipe, merchant.prices());
+	}
+
 	public void setBlessedSpiritshots(double damage, double share)
 	{
 		_blessedDamage = damage;
@@ -263,7 +390,7 @@ public class LivingPopulationManager
 	 */
 	private void recordShotDemand(ColdBot bot, ZoneCombat combat, ColdEconomy.State before, ColdEconomy.State after, ColdEconomy.Params params, long huntedMs, long now)
 	{
-		if ((huntedMs <= 0) || (bot.getTown() == null) || !after.rewardClaimed())
+		if ((huntedMs <= 0) || !after.rewardClaimed())
 		{
 			return;
 		}
@@ -276,7 +403,9 @@ public class LivingPopulationManager
 		final long available = before.soulshots() + (before.rewardClaimed() ? 0L : params.soulshotMilestoneGrant());
 		final int weaponGrade = ColdLife.gradesOf(bot, _gear, combat.tierStep())[0];
 		final int shot = LivingSupplies.shotIdForGrade(bot.getClassId(), weaponGrade, usesBlessed(bot));
-		_shotDemand.record(bot.getTown(), shot, Math.min(wanted, available), wanted, now);
+		// Every hunter buys D shots in Gludio and C shots in Giran, so the demand the Merchant reads is funnelled to the town it sells in.
+		final ShotCrafting.Recipe recipe = ShotCrafting.byShot(shot);
+		_shotDemand.record((recipe == null) ? bot.getTown() : recipe.saleTown(), shot, Math.min(wanted, available), wanted, now);
 	}
 
 	/** @return what each town's hunters fire per hour, for the Merchant's production decisions */
@@ -392,7 +521,7 @@ public class LivingPopulationManager
 		_stockSaving = _townStockDao.load(_townStock);
 		_handoff.setTownStock(_townStock);
 		_lastStockSweep = System.currentTimeMillis(); // downtime does not clear stock
-		FakePlayerStoreFactory.setSupply(new TownShops(_townStock, () -> (_catalog == null) ? List.of() : _catalog.towns(), this::payOwner));
+		FakePlayerStoreFactory.setSupply(new TownShops(_townStock, () -> (_catalog == null) ? List.of() : _catalog.towns(), this::payOwner, this::shotFloor));
 		_dao.ensureColumns(); // add columns a newer module version needs to an older table (no manual migration)
 		final long now = System.currentTimeMillis();
 		final List<ColdBot> loaded = _dao.loadAll();
@@ -515,11 +644,12 @@ public class LivingPopulationManager
 		// New bots take the starting classes the population has least of and a random name no character uses.
 		final int wanted = Math.max(0, _populationTarget);
 		final int missing = wanted - _bots.size();
-		if (missing <= 0)
+		final boolean needMerchant = (_merchant != null) && (wanted > 0) && _bots.stream().noneMatch(present -> ShotCrafting.MERCHANT.equalsIgnoreCase(present.getName()));
+		if ((missing <= 0) && !needMerchant)
 		{
 			return;
 		}
-		final int needed = LivingPopulationConfig.birthWave(_config.birthBatch(), _config.birthIntervalMs(), wanted, missing);
+		final int needed = (missing <= 0) ? 0 : LivingPopulationConfig.birthWave(_config.birthBatch(), _config.birthIntervalMs(), wanted, missing);
 		_nextBirthAt = now + _config.birthIntervalMs();
 		final Set<String> existing = new HashSet<>();
 		final Map<Integer, Integer> classes = new HashMap<>();
@@ -528,7 +658,18 @@ public class LivingPopulationManager
 			existing.add(present.getName().toLowerCase());
 			classes.merge(startingClassOf(present.getClassId()), 1, Integer::sum);
 		}
-		final List<ColdSeedPlan.SeedSpec> specs = ColdSeedPlan.plan(needed, classes, _random, name -> nameTaken(name, existing));
+		final List<ColdSeedPlan.SeedSpec> specs = new ArrayList<>(ColdSeedPlan.plan(needed, classes, _random, name -> nameTaken(name, existing)));
+		if (needMerchant)
+		{
+			if (nameTaken(ShotCrafting.MERCHANT, existing))
+			{
+				LOGGER.warning("LivingPopulation: a character is already named " + ShotCrafting.MERCHANT + ", so the Merchant cannot be born. Rename it to let the Merchant craft shots.");
+			}
+			else
+			{
+				specs.add(new ColdSeedPlan.SeedSpec("Dwarf", 53, ShotCrafting.MERCHANT)); // the Merchant: a dwarf who becomes an Artisan
+			}
+		}
 
 		int created = 0;
 		for (ColdSeedPlan.SeedSpec spec : specs)
@@ -741,7 +882,7 @@ public class LivingPopulationManager
 			}
 		};
 		final Map<String, Integer> occupancy = (travel || (_respawnLimit && combat.enabled())) ? zoneOccupancy() : null;
-		final ColdLife.Context life = travel ? new ColdLife.Context(_catalog, _travelConfig.supplyParams(_config), _travelConfig.travelParams(), priceBook, occupancy, _random, _travelConfig.riskParams(), expToNextLevel, _travelConfig.classQuestParams(), _travelConfig.skillTraining() ? this::skillTree : null, _gear, combat.enabled() ? combat : null) : null;
+		final ColdLife.Context life = travel ? new ColdLife.Context(_catalog, _travelConfig.supplyParams(_config), _travelConfig.travelParams(), priceBook, occupancy, _random, _travelConfig.riskParams(), expToNextLevel, _travelConfig.classQuestParams(), _travelConfig.skillTraining() ? this::skillTree : null, _gear, combat.enabled() ? combat : null, (_merchant == null) ? null : new MerchantWorkshop(_merchant)) : null;
 		_handoff.setLife(life); // hot bots make the same decisions, acted out by their live characters
 
 		// Resolve up to resolveBatch due bots, starting from a rotating cursor so a population larger than the batch is
@@ -1594,7 +1735,7 @@ public class LivingPopulationManager
 			return;
 		}
 		final double hours = (now - last) / 3_600_000.0;
-		for (TownStock.Listing gone : _townStock.decay(1.0 - Math.pow(0.5, hours / _stockHalfLifeHours), _random))
+		for (TownStock.Listing gone : _townStock.decay(1.0 - Math.pow(0.5, hours / _stockHalfLifeHours), _random, SHOT_ITEMS))
 		{
 			final ItemTemplate item = ItemData.getInstance().getTemplate(gone.itemId());
 			payOwner(gone.owner(), gone.count() * ((item == null) ? 0L : Math.max(0L, item.getReferencePrice() / 2L)));
