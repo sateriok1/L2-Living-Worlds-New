@@ -1026,6 +1026,11 @@ public class LivingPopulationManager
 		// advanced fairly round-robin. (Starting from index 0 every tick would let the first resolveBatch bots, which
 		// become due again by the next tick, monopolize the budget and starve every bot beyond them forever.)
 		final int size = _bots.size();
+		int topLevel = 0;
+		for (ColdBot present : _bots)
+		{
+			topLevel = Math.max(topLevel, present.getLevel());
+		}
 		final int batch = Math.max(1, _config.resolveBatch());
 		int resolved = 0;
 		int examined = 0;
@@ -1055,6 +1060,7 @@ public class LivingPopulationManager
 				final double zoneExp = _zoneExp ? gapData.expPerKill(bot.getZone()) : -1.0;
 				return (zoneExp > 0.0) ? (zoneExp * rate) : (level * expPerKillUnitPerRate);
 			};
+			final int topLevelNow = topLevel;
 			final IntToLongFunction expPerMinuteForLevel = level ->
 			{
 				final double perKill = perKillAt.applyAsDouble(level);
@@ -1066,7 +1072,7 @@ public class LivingPopulationManager
 				final ZoneCombat.PartyOutcome party = partyChoice(combat, bot, level, perKill, soloRate, now, expToNextLevel);
 				final double kills = (party == null) ? soloRate : capToZone(combat, bot, party.killsPerMinute(), occupancy);
 				final double base = Math.max(0.0, perKill * kills * ((party == null) ? 1.0 : party.expShare()));
-				return (long) Math.max(0.0, base * PopulationDirector.pressure(level, targetLevel, directorParams));
+				return (long) Math.max(0.0, base * PopulationDirector.pressure(level, targetLevel, directorParams) * ColdSeedPlan.expBonus(bot.getName(), level, topLevelNow));
 			};
 			final ColdProgression.Progress progress = ColdProgression.resolve(bot.getLevel(), bot.getExpIntoLevel(), huntedMs, maxLevel, expToNextLevel, expPerMinuteForLevel);
 			// The rate at the level it ends the span on drives the span's kills, adena, soulshots and drops (a span is short).

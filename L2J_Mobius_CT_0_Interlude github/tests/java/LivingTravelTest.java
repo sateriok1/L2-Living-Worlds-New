@@ -730,6 +730,9 @@ public class LivingTravelTest
 			mystics += (ColdSeedPlan.zion(coin).classId() == 10) ? 1 : 0;
 		}
 		check("SonOfZion is a Mystic about half the time and an Orc Fighter the rest", (mystics > 60) && (mystics < 140));
+		check("the named bots earn 30% more while two or more levels below the top", (ColdSeedPlan.expBonus("aiTeras", 30, 40) == 1.3) && (ColdSeedPlan.expBonus("aiSateriok", 37, 40) == 1.3) && (ColdSeedPlan.expBonus("aiSonOfZion", 1, 80) == 1.3));
+		check("within a level of the top they earn the plain rate", (ColdSeedPlan.expBonus("aiTeras", 39, 40) == 1.0) && (ColdSeedPlan.expBonus("aiTeras", 40, 40) == 1.0) && (ColdSeedPlan.expBonus("aiSateriok", 41, 40) == 1.0));
+		check("nobody else gets it", (ColdSeedPlan.expBonus("Sateya", 10, 60) == 1.0) && (ColdSeedPlan.expBonus("Tester", 10, 60) == 1.0));
 		final ColdSeedPlan.SeedSpec teras = ColdSeedPlan.randomNamed("aiTeras", new Random(3));
 		check("Teras is born in a starting class of a race", "aiTeras".equals(teras.name()) && (teras.race() != null) && (ClassPath.next(teras.classId(), 1L) != -1));
 

@@ -98,6 +98,23 @@ public final class ColdSeedPlan
 	{
 	}
 
+	/** How much more experience the three named bots earn in the cold simulation (30%), until they are within a level of the top. */
+	public static final double NAMED_EXP_BONUS = 1.3;
+
+	/**
+	 * The experience multiplier of a cold bot: the three named bots (the owner, aiSonOfZion and aiTeras) earn 30% more
+	 * until they come within one level of the highest-level bot, so they stay competitive without being pushed to the top.
+	 * @param name the bot's name
+	 * @param level its level
+	 * @param topLevel the highest level of any bot
+	 * @return 1.3 or 1.0
+	 */
+	public static double expBonus(String name, int level, int topLevel)
+	{
+		final boolean named = OWNER.equalsIgnoreCase(name) || ZION.equalsIgnoreCase(name) || FRIEND.equalsIgnoreCase(name);
+		return (named && ((topLevel - level) > 1)) ? NAMED_EXP_BONUS : 1.0;
+	}
+
 	/**
 	 * @param random the source
 	 * @return aiSonOfZion, a human Mystic or an Orc Fighter by a coin toss
