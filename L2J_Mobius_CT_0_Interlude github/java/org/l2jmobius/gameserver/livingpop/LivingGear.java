@@ -232,6 +232,22 @@ public final class LivingGear
 	}
 
 	/**
+	 * @param level a bot level
+	 * @return the level at which the next grade opens up for it, or 0 when it is already at the top grade
+	 */
+	public static int nextGradeLevel(int level)
+	{
+		for (int unlock : GRADE_LEVEL)
+		{
+			if (unlock > level)
+			{
+				return unlock;
+			}
+		}
+		return 0;
+	}
+
+	/**
 	 * @param grade a grade (0 to 5)
 	 * @return its name
 	 */
@@ -690,7 +706,7 @@ public final class LivingGear
 	}
 
 	/** Puts a piece in its slot and returns what came off. */
-	private static List<Integer> put(Map<Slot, Integer> gear, Slot slot, Piece piece, Items items)
+	static List<Integer> put(Map<Slot, Integer> gear, Slot slot, Piece piece, Items items)
 	{
 		final List<Integer> removed = new ArrayList<>();
 		final Integer old = gear.put(slot, piece.itemId());

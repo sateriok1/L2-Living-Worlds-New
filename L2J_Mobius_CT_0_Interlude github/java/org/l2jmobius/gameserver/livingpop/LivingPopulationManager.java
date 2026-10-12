@@ -136,7 +136,7 @@ public class LivingPopulationManager
 	private static final Set<Integer> SHOT_ITEMS = Set.of(1463, 1464, 3948, 3949); // a Merchant's shots stay on sale until they sell
 	private volatile MerchantConfig _merchant; // null = Merchants do not craft
 	private final ShotDemand _shotDemand = new ShotDemand(); // shots fired per hour by each town's hunters (what a Merchant produces for)
-	private volatile double _stockHalfLifeHours = 6.0; // unsold town stock: half of it is cleared (paid at the vendor price) in this long
+	private volatile double _stockHalfLifeHours = 1.0; // unsold town stock: half of it is cleared (paid at the vendor price) in this long
 	private volatile long _lastStockSweep; // when the town stock last cleared, 0 until the first tick
 	private volatile boolean _stockSaving; // false when the saved stock could not be read, so a save never overwrites it
 	private final Map<String, Map<Integer, Double>> _zoneGear = new ConcurrentHashMap<>(); // zone|level|spoiler -> gear drop chances

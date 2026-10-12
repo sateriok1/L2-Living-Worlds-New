@@ -76,6 +76,7 @@ PROD_SOURCES=(
 	"java/org/l2jmobius/gameserver/livingpop/DecisionLog.java"
 	"java/org/l2jmobius/gameserver/livingpop/ZoneCatalog.java"
 	"java/org/l2jmobius/gameserver/livingpop/PotionPlanner.java"
+	"java/org/l2jmobius/gameserver/livingpop/GearPlanner.java"
 	"java/org/l2jmobius/gameserver/livingpop/SupplyPlanner.java"
 	"java/org/l2jmobius/gameserver/livingpop/GoalPlanner.java"
 	"java/org/l2jmobius/gameserver/livingpop/ZoneChooser.java"

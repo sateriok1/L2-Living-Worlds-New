@@ -2297,7 +2297,8 @@ public final class ColdLife
 		final SupplyPlanner.Purchase supplies = SupplyPlanner.shop(bot.getLevel(), purse(bot), Math.max(0L, escapesLeft), bot.getPotions(), bot.getSoulshots(), bot.getGearTier(), bot.isRewardClaimed(), prices, supply);
 		final long adena = Math.max(0L, purse(bot) - supplies.cost());
 		final long budget = upgradeBudget(bot, adena, context);
-		final List<LivingGear.Change> affordable = LivingGear.shop(gearOf(bot), fit, bot.getLevel(), budget, offers, shop.items());
+		final GearPlanner.Valuation value = gearValue(bot, context);
+		final List<LivingGear.Change> affordable = shopPieces(bot, context, gearOf(bot), fit, budget, offers, shop.items(), Set.of());
 		// Filling an empty slot is always an upgrade, so on its own it is only worth the trip for a piece that costs more
 		// than the trip itself (a cheap no-grade ring waits for a visit made for something else).
 		final long tripCost = EMPTY_SLOT_TRIP_MIN + (usesEscape(bot, town, context) ? prices.escape() : 0L) + feeBack(bot, town, context);
@@ -2317,7 +2318,7 @@ public final class ColdLife
 		{
 			return new String[3]; // only small pieces it can afford: it buys them on its next visit, no trip of their own
 		}
-		final LivingGear.Change wish = LivingGear.wish(gearOf(bot), fit, bot.getLevel(), offers, shop.items());
+		final LivingGear.Change wish = wishOf(gearOf(bot), fit, bot.getLevel(), offers, shop.items(), value, (value == null) ? 0.0 : gearHorizon(bot, context));
 		if (wish == null)
 		{
 			return new String[3];
@@ -2385,6 +2386,41 @@ public final class ColdLife
 		wishFor(bot, town, context, gearOf(bot), fitOf(shop, bot.getClassId(), bot.getId(), bot.getLevel()), now);
 	}
 
+	/**
+	 * What a bot buys with this money: the pieces that earn their price back soonest within the time they are worth, best first
+	 * ({@link GearPlanner}); and once nothing is left to buy or save for on that count, whatever else is a good upgrade by the stat rule
+	 * ({@link LivingGear#shop}), since the money has no other use. So the pieces that matter come first and jewelry the model sees no use
+	 * in comes last, but a bot is never held back from gearing up by a piece that pays back slowly. Without a valuation, the stat rule alone.
+	 * @param gear what it wears; updated in place
+	 * @return what it bought, in order
+	 */
+	private static List<LivingGear.Change> shopPieces(ColdBot bot, Context context, Map<LivingGear.Slot, Integer> gear, LivingGear.Fit fit, long budget, List<LivingGear.Offer> offers, LivingGear.Items items, Set<LivingGear.Slot> locked)
+	{
+		final GearPlanner.Valuation value = gearValue(bot, context);
+		if (value == null)
+		{
+			return LivingGear.shop(gear, fit, bot.getLevel(), budget, offers, items, locked);
+		}
+		final double horizon = gearHorizon(bot, context);
+		final List<LivingGear.Change> ranked = GearPlanner.shop(gear, fit, bot.getLevel(), budget, offers, items, locked, value, horizon);
+		if (!ranked.isEmpty() || (GearPlanner.wish(gear, fit, bot.getLevel(), offers, items, value, horizon) != null))
+		{
+			return ranked; // it buys what pays back, or saves for what would
+		}
+		return LivingGear.shop(gear, fit, bot.getLevel(), budget, offers, items, locked);
+	}
+
+	/** The piece a bot saves up for: the one that earns its price back soonest when the model can value gear; when none does (or without a valuation), the first good upgrade by the stat rule. */
+	private static LivingGear.Change wishOf(Map<LivingGear.Slot, Integer> gear, LivingGear.Fit fit, int level, List<LivingGear.Offer> offers, LivingGear.Items items, GearPlanner.Valuation value, double horizon)
+	{
+		if (value == null)
+		{
+			return LivingGear.wish(gear, fit, level, offers, items);
+		}
+		final GearPlanner.Pick pick = GearPlanner.wish(gear, fit, level, offers, items, value, horizon);
+		return (pick == null) ? LivingGear.wish(gear, fit, level, offers, items) : pick.change(); // nothing pays back: the first good upgrade by the stat rule, as it buys then
+	}
+
 	private static void wishFor(ColdBot bot, Town town, Context context, Map<LivingGear.Slot, Integer> gear, LivingGear.Fit fit, long now)
 	{
 		final Workshop workshop = context.workshop();
@@ -2397,7 +2433,7 @@ public final class ColdLife
 		{
 			return; // a player's request is going: the hunters' wishes wait until it is done
 		}
-		final LivingGear.Change wish = LivingGear.wish(gear, fit, bot.getLevel(), offersIn(shop, town), shop.items());
+		final LivingGear.Change wish = wishOf(gear, fit, bot.getLevel(), offersIn(shop, town), shop.items(), gearValue(bot, context), gearHorizon(bot, context));
 		if (wish == null)
 		{
 			workshop.gearClear(bot.getId());
@@ -2479,7 +2515,7 @@ public final class ColdLife
 			final boolean paying = (mine != null) && (mine.state() == GearOrders.State.READY) && town.name().equals(mine.town());
 			final long budget = paying ? rawUpgradeBudget(bot, cash, context) : upgradeBudget(bot, cash, context);
 			final List<LivingGear.Offer> offers = withCrafted(offersIn(shop, town), bot, workshop, town, shop);
-			final List<LivingGear.Change> bought = LivingGear.shop(gear, fit, bot.getLevel(), budget, offers, shop.items(), locked);
+			final List<LivingGear.Change> bought = shopPieces(bot, context, gear, fit, budget, offers, shop.items(), locked);
 			if (bought.isEmpty())
 			{
 				break;
@@ -2624,7 +2660,12 @@ public final class ColdLife
 			final int[] grades = gradesOf(bot, shop, combat.tierStep());
 			return combat.curveStats(ZoneCombat.roleOf(bot.getClassId()), grades[0], grades[1]);
 		}
-		final Map<LivingGear.Slot, Integer> gear = gearOf(bot);
+		return statsOf(bot, gearOf(bot), shop, combat);
+	}
+
+	/** As {@link #statsOf(ColdBot, GearShop, ZoneCombat)} for gear it might wear: the same sums over the given set. */
+	static ZoneCombat.Stats statsOf(ColdBot bot, Map<LivingGear.Slot, Integer> gear, GearShop shop, ZoneCombat combat)
+	{
 		final LivingGear.Items items = shop.items();
 		final boolean mystic = LivingSupplies.isMystic(bot.getClassId());
 		final boolean mage = ZoneCombat.roleOf(bot.getClassId()) == ZoneCombat.Role.MAGE;
@@ -2866,6 +2907,82 @@ public final class ColdLife
 	public static double potionCeiling(ColdBot bot, double flatHabit)
 	{
 		return (bot.getPotionCap() >= 0.0) ? bot.getPotionCap() : flatHabit;
+	}
+
+	/** The shortest and longest a piece of gear is given to earn its price back, in hours of hunting. */
+	public static final double GEAR_HORIZON_MIN = 4.0;
+	public static final double GEAR_HORIZON_MAX = 200.0;
+
+	/**
+	 * How long a piece of gear is worth planning for: the time until the next grade opens up for the bot and this one is outgrown,
+	 * at the net experience an hour its zone gives it now. A piece has to earn its price back before then, so a bot far from the next
+	 * grade can afford to wait for a piece to pay off and one about to outgrow it cannot. Between {@link #GEAR_HORIZON_MIN} and
+	 * {@link #GEAR_HORIZON_MAX} hours; the longest at the top grade, where nothing is outgrown.
+	 */
+	static double gearHorizon(ColdBot bot, Context context)
+	{
+		final ZoneCombat combat = context.combat();
+		final GearShop shop = context.gear();
+		final int next = LivingGear.nextGradeLevel(bot.getLevel());
+		if ((next <= 0) || (combat == null) || !combat.enabled() || (shop == null) || (context.expToNext() == null) || (bot.getZone() == null) || !combat.knows(bot.getZone()))
+		{
+			return GEAR_HORIZON_MAX;
+		}
+		final ZoneCombat.Stats stats = statsOf(bot, shop, combat);
+		final int level = bot.getLevel();
+		final double kills = Math.max(0.3, Math.min(combat.killsPerMinute(bot.getZone(), bot.getClassId(), level, stats, 1.0, 1.0, false, Math.max(0.0, bot.getPotionRate())), combat.respawnCap(bot.getZone(), 1, ZONE_SHARE)));
+		final double rate = combat.deathsPerHour(bot.getZone(), bot.getClassId(), level, stats);
+		final double deaths = (rate >= 0.0) ? ColdRisk.fromRate(rate, bot.getPotions()).deathsPerHour() : 0.0;
+		final double lossPerDeath = (ColdRisk.expLossPercent(level) / 100.0) * context.expToNext().applyAsLong(level);
+		final double perHour = (kills * 60.0 * combat.expPerKill(bot.getZone())) - (deaths * lossPerDeath);
+		if (perHour <= 0.0)
+		{
+			return GEAR_HORIZON_MAX;
+		}
+		double needed = -bot.getExpIntoLevel();
+		for (int l = level; l < next; l++)
+		{
+			needed += context.expToNext().applyAsLong(l);
+		}
+		return Math.max(GEAR_HORIZON_MIN, Math.min(GEAR_HORIZON_MAX, needed / perHour));
+	}
+
+	/**
+	 * What hunting its zone earns this bot an hour with a set of gear, from the zone model: the kills it makes with that gear, each
+	 * worth what the zone pays in adena and loot plus its experience (weighed as for potions, {@link #POTION_EXP_WEIGHT}), less the
+	 * experience its deaths cost at that gear's defence. The same zone, skills and potions for every set, so only the gear differs.
+	 * @return the valuation, or null when the model does not know the zone or the bot has no income figure yet (it then buys by the
+	 *         old stat rule)
+	 */
+	static GearPlanner.Valuation gearValue(ColdBot bot, Context context)
+	{
+		final ZoneCombat combat = context.combat();
+		final GearShop shop = context.gear();
+		if ((combat == null) || !combat.enabled() || (shop == null) || (bot.getGear() == null) || (context.expToNext() == null) || (bot.getZone() == null) || !combat.knows(bot.getZone()))
+		{
+			return null;
+		}
+		final double expPerKill = combat.expPerKill(bot.getZone());
+		if ((expPerKill <= 0.0) || (bot.getKillRate() <= 0.0) || (bot.getIncomeRate() <= 0.0))
+		{
+			return null;
+		}
+		final String zone = bot.getZone();
+		final int level = bot.getLevel();
+		final double adenaPerKill = bot.getIncomeRate() / (bot.getKillRate() * 60.0);
+		final double perExp = (adenaPerKill * POTION_EXP_WEIGHT) / expPerKill; // what one experience point is worth in adena
+		final double lossPerDeath = (ColdRisk.expLossPercent(level) / 100.0) * context.expToNext().applyAsLong(level);
+		final double potions = Math.max(0.0, bot.getPotionRate());
+		final Map<String, Integer> occupancy = context.occupancy();
+		final double cap = combat.respawnCap(zone, ((occupancy == null) ? 0 : occupancy.getOrDefault(zone, 0)) + 1, ZONE_SHARE);
+		return gear ->
+		{
+			final ZoneCombat.Stats stats = statsOf(bot, gear, shop, combat);
+			final double kills = Math.max(0.3, Math.min(combat.killsPerMinute(zone, bot.getClassId(), level, stats, 1.0, 1.0, false, potions), cap));
+			final double rate = combat.deathsPerHour(zone, bot.getClassId(), level, stats);
+			final double deaths = (rate >= 0.0) ? ColdRisk.fromRate(rate, bot.getPotions()).deathsPerHour() : 0.0;
+			return (kills * 60.0 * adenaPerKill * (1.0 + POTION_EXP_WEIGHT)) - (deaths * lossPerDeath * perExp);
+		};
 	}
 
 	/** The share of a zone's spawns a bot can practically reach, as the hunting model uses it (RespawnShare). */

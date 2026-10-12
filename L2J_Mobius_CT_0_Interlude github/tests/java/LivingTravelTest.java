@@ -35,6 +35,7 @@ import org.l2jmobius.gameserver.livingpop.ColdSeedPlan;
 import org.l2jmobius.gameserver.livingpop.DecisionLog;
 import org.l2jmobius.gameserver.livingpop.DropYield;
 import org.l2jmobius.gameserver.livingpop.MerchantPlanner;
+import org.l2jmobius.gameserver.livingpop.GearPlanner;
 import org.l2jmobius.gameserver.livingpop.PotionPlanner;
 import org.l2jmobius.gameserver.livingpop.RaidLoot;
 import org.l2jmobius.gameserver.livingpop.RaidPlanner;
@@ -110,6 +111,7 @@ public class LivingTravelTest
 		testColdDeathAndRest();
 		testWaryAfterDeath();
 		testPartyDrinksNoPotions();
+		testGearPayback();
 		testMerchantGearErrand();
 		testLivingChat();
 		testClassPath();
@@ -373,6 +375,69 @@ public class LivingTravelTest
 		check("a stay does not move", stay.positionAt(250L).equals(new Point(5, 6, 7)));
 		check("round trip through the row text", TravelLeg.decode(walk.encode()).equals(walk));
 		check("bad text gives no leg", (TravelLeg.decode("1,2,3") == null) && (TravelLeg.decode("a,b,c,d,e,f,g,h") == null) && (TravelLeg.decode(null) == null));
+	}
+
+	private static void testGearPayback()
+	{
+		// What a set of gear earns an hour in this made-up zone: the weapon matters a little, the armor a lot, jewelry not at all.
+		final GearPlanner.Valuation armorMatters = worn -> (30.0 * stat(worn, true)) + (200.0 * stat(worn, false));
+		final List<LivingGear.Offer> shopWindow = List.of(new LivingGear.Offer(PIECES.get(11), 2500L, true), new LivingGear.Offer(PIECES.get(22), 4000L, true), new LivingGear.Offer(PIECES.get(41), 1000L, true));
+
+		// Money for one piece only: the old rule buys the weapon (first in shop order), the payback rule buys the chest armor that earns far more.
+		final Map<LivingGear.Slot, Integer> oldWay = gear("weapon:10,chest:20,legs:21");
+		final List<LivingGear.Change> byRule = LivingGear.shop(oldWay, WARRIOR, 25, 4000L, shopWindow, GEAR_ITEMS);
+		check("the stat rule buys the weapon first with money for one piece", !byRule.isEmpty() && (byRule.get(0).slot() == LivingGear.Slot.WEAPON));
+		final Map<LivingGear.Slot, Integer> newWay = gear("weapon:10,chest:20,legs:21");
+		final List<LivingGear.Change> byPayback = GearPlanner.shop(newWay, WARRIOR, 25, 4000L, shopWindow, GEAR_ITEMS, Set.of(), armorMatters, 24.0);
+		check("the payback rule buys the armor that earns the most back", (byPayback.size() == 1) && (byPayback.get(0).slot() == LivingGear.Slot.CHEST) && (byPayback.get(0).piece().itemId() == 22));
+		check("what it replaces is reported and the gear is updated in place", byPayback.get(0).removed().contains(20) && (newWay.get(LivingGear.Slot.CHEST) == 22));
+
+		// With enough money it buys both, the better payback first, and never the ring that changes nothing.
+		final Map<LivingGear.Slot, Integer> rich = gear("weapon:10,chest:20,legs:21");
+		final List<LivingGear.Change> all = GearPlanner.shop(rich, WARRIOR, 25, 100_000L, shopWindow, GEAR_ITEMS, Set.of(), armorMatters, 24.0);
+		check("with the money it buys the armor, then the weapon", (all.size() == 2) && (all.get(0).slot() == LivingGear.Slot.CHEST) && (all.get(1).slot() == LivingGear.Slot.WEAPON));
+		check("it never buys a ring that earns nothing", all.stream().noneMatch(c -> c.slot() == LivingGear.Slot.RING1));
+		final List<LivingGear.Change> oldRich = LivingGear.shop(gear("weapon:10,chest:20,legs:21"), WARRIOR, 25, 100_000L, shopWindow, GEAR_ITEMS);
+		check("the stat rule does buy that ring", oldRich.stream().anyMatch(c -> c.slot() == LivingGear.Slot.RING1));
+
+		// The horizon: a piece that takes longer than that to pay back is not bought.
+		final Map<LivingGear.Slot, Integer> shortHorizon = gear("weapon:10,chest:22,legs:23");
+		check("a weapon that pays back in about eight hours waits with a four hour horizon", GearPlanner.shop(shortHorizon, WARRIOR, 25, 100_000L, shopWindow, GEAR_ITEMS, Set.of(), armorMatters, 4.0).isEmpty());
+		final Map<LivingGear.Slot, Integer> longHorizon = gear("weapon:10,chest:22,legs:23");
+		check("and is bought with a twelve hour horizon", GearPlanner.shop(longHorizon, WARRIOR, 25, 100_000L, shopWindow, GEAR_ITEMS, Set.of(), armorMatters, 12.0).stream().anyMatch(c -> c.slot() == LivingGear.Slot.WEAPON));
+
+		// Slots bought earlier on the visit stay as they are.
+		final Map<LivingGear.Slot, Integer> locked = gear("weapon:10,chest:20,legs:21");
+		check("a locked slot is left alone", GearPlanner.shop(locked, WARRIOR, 25, 100_000L, shopWindow, GEAR_ITEMS, Set.of(LivingGear.Slot.CHEST), armorMatters, 24.0).stream().noneMatch(c -> c.slot() == LivingGear.Slot.CHEST));
+
+		// What it saves up for: the best payback whatever it costs, and nothing when nothing earns its price back.
+		final GearPlanner.Pick wish = GearPlanner.wish(gear("weapon:10,chest:20,legs:21"), WARRIOR, 25, shopWindow, GEAR_ITEMS, armorMatters, 24.0);
+		check("it saves up for the piece with the best payback", (wish != null) && (wish.change().piece().itemId() == 22) && (wish.paybackHours() < 1.0));
+		check("it saves for no ring that would not earn anything", GearPlanner.wish(gear("weapon:10,chest:22,legs:23"), WARRIOR, 25, List.of(new LivingGear.Offer(PIECES.get(41), 1000L, true)), GEAR_ITEMS, armorMatters, 24.0) == null);
+
+		// The sale of the old piece counts toward the cost.
+		final GearPlanner.Valuation weaponOnly = worn -> 10.0 * stat(worn, true);
+		final Map<LivingGear.Slot, Integer> trade = gear("weapon:11");
+		final List<LivingGear.Offer> pricey = List.of(new LivingGear.Offer(PIECES.get(13), 27_500L, true));
+		check("an old piece's sale price lowers the cost (25000 net, 300 an hour is 83 hours)", GearPlanner.wish(trade, WARRIOR, 25, pricey, GEAR_ITEMS, weaponOnly, 80.0) == null);
+		check("and 90 hours accepts it", GearPlanner.wish(trade, WARRIOR, 25, pricey, GEAR_ITEMS, weaponOnly, 90.0) != null);
+		check("with nothing to spend it buys nothing", GearPlanner.shop(gear("weapon:10"), WARRIOR, 25, 0L, shopWindow, GEAR_ITEMS, Set.of(), armorMatters, 24.0).isEmpty());
+	}
+
+	/** The weapon's P.Atk (weapon true) or the P.Def of the armor worn, for the made-up valuation in the gear payback test. */
+	private static double stat(Map<LivingGear.Slot, Integer> worn, boolean weapon)
+	{
+		double total = 0.0;
+		for (Map.Entry<LivingGear.Slot, Integer> entry : worn.entrySet())
+		{
+			final LivingGear.Piece piece = PIECES.get(entry.getValue());
+			if (piece == null)
+			{
+				continue;
+			}
+			total += weapon ? ((entry.getKey() == LivingGear.Slot.WEAPON) ? piece.pAtk() : 0.0) : ((entry.getKey() == LivingGear.Slot.WEAPON) ? 0.0 : piece.pDef());
+		}
+		return total;
 	}
 
 	private static void testPartyDrinksNoPotions() throws Exception
