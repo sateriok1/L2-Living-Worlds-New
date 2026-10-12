@@ -794,8 +794,9 @@ public class LivingTravelTest
 		check("nobody else gets it", (ColdSeedPlan.expBonus("Sateya", 10, 60) == 1.0) && (ColdSeedPlan.expBonus("Tester", 10, 60) == 1.0));
 		check("the named bots wear their titles", "Dev God".equals(ColdSeedPlan.titleOf("aiSateriok")) && "Bot Torturer".equals(ColdSeedPlan.titleOf("aiSonOfZion")) && "Administrator".equals(ColdSeedPlan.titleOf("aiTeras")) && "The Merchant".equals(ColdSeedPlan.titleOf("Sateya")) && (ColdSeedPlan.titleOf("Tester") == null));
 		check("the named bots carry their titles", "The Admin".equals(ColdSeedPlan.title("aiTeras")) && "Bot Torturer".equals(ColdSeedPlan.title("aiSonOfZion")) && "Dev God".equals(ColdSeedPlan.title("aiSateriok")) && "The Merchant".equals(ColdSeedPlan.title("Sateya")) && (ColdSeedPlan.title("Other") == null));
-		final ColdSeedPlan.SeedSpec teras = ColdSeedPlan.randomNamed("aiTeras", new Random(3));
-		check("Teras is born in a starting class of a race", "aiTeras".equals(teras.name()) && (teras.race() != null) && (ClassPath.next(teras.classId(), 1L) != -1));
+		final ColdSeedPlan.SeedSpec teras = ColdSeedPlan.teras();
+		check("Teras is born a Dwarven Fighter", "aiTeras".equals(teras.name()) && "Dwarf".equals(teras.race()) && (teras.classId() == 53));
+		check("and grows up to be a spoiler: Scavenger, Bounty Hunter, Fortune Seeker", (ClassPath.next(53, 9L, "aiTeras") == 54) && (ClassPath.next(54, 9L, "aiTeras") == 55) && (ClassPath.next(55, 9L, "aiTeras") == 117) && LivingSupplies.isSpoiler(117));
 
 		final ColdBot saved = new ColdBot();
 		saved.setStatsJson(merchant.getStatsJson());
