@@ -1883,6 +1883,12 @@ public class LivingPopulationManager
 				final ItemTemplate item = ItemData.getInstance().getTemplate(itemId);
 				return (item == null) ? 0L : Math.max(0L, item.getReferencePrice() / 2L);
 			}
+
+			@Override
+			public long listPrice(int itemId)
+			{
+				return price(itemId);
+			}
 		};
 		final Map<String, Integer> occupancy = (travel || (_respawnLimit && combat.enabled())) ? zoneOccupancy() : null;
 		final ColdLife.Context life = travel ? new ColdLife.Context(_catalog, _travelConfig.supplyParams(_config), _travelConfig.travelParams(), priceBook, occupancy, _random, _travelConfig.riskParams(), expToNextLevel, _travelConfig.classQuestParams(), _travelConfig.skillTraining() ? this::skillTree : null, _gear, combat.enabled() ? combat : null, (_merchant == null) ? null : new MerchantWorkshop(_merchant, combat.enabled() ? combat.tierStep() : _config.gearTierLevelStep())) : null;
@@ -1923,6 +1929,11 @@ public class LivingPopulationManager
 			final long elapsed = Math.max(0L, now - bot.getLastResolvedAt());
 			// With travel on, experience, adena and soulshot use accrue only while hunting (not while traveling or in town).
 			final long huntedMs = (!travel || ColdLife.isHunting(bot.getActivity())) ? elapsed : 0L;
+			// What it can afford to spend on potions an hour: a share of what it last earned, over the price of one.
+			if (travel && (huntedMs > 0))
+			{
+				bot.setPotionCap(ColdLife.potionCapFor(bot, ColdLife.pricesFor(bot, life).potion()));
+			}
 			// This bot's own kill rate: its stats against the average monster of the zone it hunts (the flat rate when the model is off).
 			final java.util.function.IntToDoubleFunction perKillAt = level ->
 			{
@@ -2022,6 +2033,11 @@ public class LivingPopulationManager
 						bot.setLoot(Math.min(ColdEconomy.MAX_ADENA, bot.getLoot() + found));
 						huntAdena += found;
 					}
+				}
+				if ((huntedMs > 0) && (yield != null))
+				{
+					// What this stretch earned an hour, kills and loot, whether the loot went to the bot or the town's stock.
+					bot.setIncomeRate(botKillsPerMinute * 60.0 * lootScale * (yield.adena() + yield.loot()));
 				}
 				bot.setAdena(after.adena());
 				bot.setSoulshots(after.soulshots());
@@ -2152,13 +2168,24 @@ public class LivingPopulationManager
 	 */
 	private double potionFractionOf(ZoneCombat combat, ColdBot bot, int level, long huntedMs)
 	{
-		final double perHour = _travelConfig.potionsPerHour() * LivingSupplies.potionUseFactor(bot.getClassId());
-		if (perHour <= 0.0)
+		final double perHour = potionCeilingOf(bot);
+		if ((perHour <= 0.0) || (bot.getPartyDeathsPerHour() >= 0.0))
 		{
+			if (bot.getPartyDeathsPerHour() >= 0.0)
+			{
+				bot.setPotionRate(0.0); // a party's healer keeps it up
+			}
 			return 1.0;
 		}
 		final double needed = combat.potionsPerHour(bot.getZone(), bot.getClassId(), level, ColdLife.statsOf(bot, _gear, combat), 1.0, perHour);
+		bot.setPotionRate(needed); // the stock it carries follows it
 		return LivingSupplies.coverage(bot.getPotions(), needed, huntedMs / 3_600_000.0);
+	}
+
+	/** @return the most potions an hour this bot drinks: what it can afford from what it earns, or the flat habit before it has earned */
+	private double potionCeilingOf(ColdBot bot)
+	{
+		return ColdLife.potionCeiling(bot, _travelConfig.potionsPerHour() * LivingSupplies.potionUseFactor(bot.getClassId()));
 	}
 
 	private double killsPerMinuteOf(ZoneCombat combat, ColdBot bot, int level, double flat, double shotFraction, long huntedMs)
@@ -2173,7 +2200,7 @@ public class LivingPopulationManager
 		{
 			skills = ZoneCombat.skillFraction(skillTree(bot.getClassId()), SkillPlanner.decode(bot.getSkills()), level);
 		}
-		return combat.killsPerMinute(bot.getZone(), bot.getClassId(), level, stats, skills, shotFraction, usesBlessed(bot), _travelConfig.potionsPerHour() * LivingSupplies.potionUseFactor(bot.getClassId()) * potionFractionOf(combat, bot, level, huntedMs));
+		return combat.killsPerMinute(bot.getZone(), bot.getClassId(), level, stats, skills, shotFraction, usesBlessed(bot), potionCeilingOf(bot) * potionFractionOf(combat, bot, level, huntedMs));
 	}
 
 	/**
@@ -2990,7 +3017,7 @@ public class LivingPopulationManager
 			// Shots and potions last as long as the stock does at the rate the fight uses them (as in hunting: part of the fight is shot, part is not).
 			final double shotRate = _model.raidShotRate(bot.getClassId(), level);
 			final double shotSeconds = (!bot.isRewardClaimed() || (shotRate <= 0.0)) ? Double.POSITIVE_INFINITY : (Math.max(0L, bot.getSoulshots()) / shotRate);
-			final double potionRate = (_travelConfig.potionsPerHour() * LivingSupplies.potionUseFactor(bot.getClassId())) / 3600.0;
+			final double potionRate = (seat == 0) ? ((_travelConfig.potionsPerHour() * LivingSupplies.potionUseFactor(bot.getClassId())) / 3600.0) : 0.0; // the team's healer keeps the others up: only the tank drinks
 			final double potionHps = potionRate * ZoneCombat.raidPotionHeal(level);
 			final double potionSeconds = (potionRate <= 0.0) ? 0.0 : (Math.max(0L, bot.getPotions()) / potionRate);
 			final double plain = fights ? _model.raidDps(zone, bot.getClassId(), level, stats, skills, 0.0, usesBlessed(bot)) : 0.0;
@@ -3062,7 +3089,7 @@ public class LivingPopulationManager
 					}
 				}
 			}
-			final double expected = (fightSeconds / 3600.0) * _travelConfig.potionsPerHour() * LivingSupplies.potionUseFactor(bot.getClassId());
+			final double expected = (ZoneCombat.seatOf(bot.getClassId()) == 0) ? ((fightSeconds / 3600.0) * _travelConfig.potionsPerHour() * LivingSupplies.potionUseFactor(bot.getClassId())) : 0.0; // only the tank drinks in a raid; the healer keeps the others up
 			long drunk = (long) Math.floor(expected);
 			if (_random.nextDouble() < (expected - drunk))
 			{

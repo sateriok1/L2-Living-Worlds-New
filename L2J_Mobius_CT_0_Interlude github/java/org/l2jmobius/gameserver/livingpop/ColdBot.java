@@ -82,6 +82,9 @@ public class ColdBot
 	private volatile double _partyDeathFactor; // zone model: the death factor while hunting in the virtual party (0 = hunting alone); not saved
 	private volatile double _partyDeaths = -1.0; // zone model: deaths an hour in the virtual party from the HP model (-1 = none); not saved
 	private volatile double _killRate; // zone model: kills a minute last given (0 = none yet); not saved
+	private volatile double _incomeRate; // adena an hour its hunting last earned, kills and loot together (0 = none yet); not saved
+	private volatile double _potionCap = -1.0; // potions an hour it can afford to drink (-1 = not worked out yet, use the flat habit); not saved
+	private volatile double _potionRate = -1.0; // potions an hour it last needed in its zone (-1 = none yet); not saved
 	private volatile double _shotsPerKill; // zone model: shots a kill takes it with its real skills and shot kind (0 = none yet); not saved
 	private volatile double _kills;
 	private volatile long _adenaEarned;
@@ -123,6 +126,39 @@ public class ColdBot
 	public void setShotsPerKill(double perKill)
 	{
 		_shotsPerKill = Math.max(0.0, perKill);
+	}
+
+	/** @return adena an hour the last stretch of hunting earned (kills and loot), or 0 before it has one */
+	public double getIncomeRate()
+	{
+		return _incomeRate;
+	}
+
+	public void setIncomeRate(double adenaPerHour)
+	{
+		_incomeRate = Math.max(0.0, adenaPerHour);
+	}
+
+	/** @return potions an hour the bot can afford to drink, or -1 when that has not been worked out (the flat habit applies) */
+	public double getPotionCap()
+	{
+		return _potionCap;
+	}
+
+	public void setPotionCap(double perHour)
+	{
+		_potionCap = (perHour < 0.0) ? -1.0 : perHour;
+	}
+
+	/** @return potions an hour the bot last needed in its zone, or -1 before it has one */
+	public double getPotionRate()
+	{
+		return _potionRate;
+	}
+
+	public void setPotionRate(double perHour)
+	{
+		_potionRate = (perHour < 0.0) ? -1.0 : perHour;
 	}
 
 	public void setKillRate(double killsPerMinute)

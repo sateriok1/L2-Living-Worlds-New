@@ -136,6 +136,12 @@ public final class ColdLife
 			return prices(level, gearTier);
 		}
 
+		/** @return what a shop charges for one of an item, 0 when unknown */
+		default long listPrice(int itemId)
+		{
+			return 0L;
+		}
+
 		/** @return what a vendor pays for one of an item (half its reference price), 0 when unknown */
 		default long vendorPrice(int itemId)
 		{
@@ -679,7 +685,11 @@ public final class ColdLife
 	private static void hunt(ColdBot bot, long now, long elapsedMs, Context context, List<DecisionLog.Event> events)
 	{
 		// Drink potions as if taking real damage while hunting. Fractional rates are rolled so the average is right.
-		double perHour = context.travel().potionsPerHour() * LivingSupplies.potionUseFactor(bot.getClassId());
+		double perHour = potionCeiling(bot, context.travel().potionsPerHour() * LivingSupplies.potionUseFactor(bot.getClassId()));
+		if (bot.getPartyDeathsPerHour() >= 0.0)
+		{
+			perHour = 0.0; // in a party its healer keeps it up: it drinks none
+		}
 		final ZoneCombat model = context.combat();
 		if ((model != null) && model.knows(bot.getZone()) && (bot.getPotions() > 0))
 		{
@@ -731,7 +741,7 @@ public final class ColdLife
 			}
 		}
 
-		final SupplyPlanner.Prices prices = context.priceBook().prices(bot.getLevel(), bot.getGearTier(), bot.getClassId());
+		final SupplyPlanner.Prices prices = pricesFor(bot, context);
 		// It plans with what it will have once its loot is sold, which it does first thing in town.
 		final Needs needs = needsOf(bot, town, context, now);
 		final String[] classErrand = needs.classErrand();
@@ -935,7 +945,7 @@ public final class ColdLife
 		{
 			return true;
 		}
-		final SupplyPlanner.Prices listed = context.priceBook().prices(bot.getLevel(), bot.getGearTier(), bot.getClassId());
+		final SupplyPlanner.Prices listed = pricesFor(bot, context);
 		final SupplyPlanner.Prices prices = new SupplyPlanner.Prices(listed.potion(), buysShotsInShops(bot, context) ? NO_GROCER_SHOTS : listed.soulshot(), listed.escape(), NO_GROCER_SHOTS);
 		final long adena = Math.min(ColdEconomy.MAX_ADENA, bot.getAdena() + bot.getLoot());
 		final SupplyPlanner.Purchase bought = SupplyPlanner.shop(bot.getLevel(), adena, bot.getEscapes(), bot.getPotions(), bot.getSoulshots(), bot.getGearTier(), bot.isRewardClaimed(), prices, supply);
@@ -962,7 +972,7 @@ public final class ColdLife
 			bot.setAdena(Math.min(ColdEconomy.MAX_ADENA, bot.getAdena() + bot.getLoot()));
 			bot.setLoot(0L);
 		}
-		final SupplyPlanner.Prices listed = context.priceBook().prices(bot.getLevel(), bot.getGearTier(), bot.getClassId());
+		final SupplyPlanner.Prices listed = pricesFor(bot, context);
 		final SupplyPlanner.Prices prices = new SupplyPlanner.Prices(listed.potion(), buysShotsInShops(bot, context) ? NO_GROCER_SHOTS : listed.soulshot(), listed.escape(), NO_GROCER_SHOTS);
 		final SupplyPlanner.Params supply = supplyFor(bot, context);
 		final SupplyPlanner.Purchase bought = SupplyPlanner.shop(bot.getLevel(), bot.getAdena(), bot.getEscapes(), bot.getPotions(), bot.getSoulshots(), bot.getGearTier(), bot.isRewardClaimed(), prices, supply);
@@ -1190,7 +1200,7 @@ public final class ColdLife
 			return;
 		}
 		final long spendable = Math.max(0L, bot.getAdena() - hold);
-		final SupplyPlanner.Prices listed = context.priceBook().prices(bot.getLevel(), bot.getGearTier(), bot.getClassId());
+		final SupplyPlanner.Prices listed = pricesFor(bot, context);
 		// The grocer does not sell D and better shots: those come from the Merchant's shops.
 		final SupplyPlanner.Prices prices = buysShotsInShops(bot, context) ? new SupplyPlanner.Prices(listed.potion(), NO_GROCER_SHOTS, listed.escape(), listed.nextTier()) : listed;
 		final SupplyPlanner.Params supply = supplyFor(bot, context);
@@ -2278,7 +2288,7 @@ public final class ColdLife
 		// What it will have for gear in town: its purse once the loot is sold, less the supplies it buys first (counting
 		// the Scroll of Escape the trip itself uses, when it uses one rather than walking).
 		final SupplyPlanner.Params supply = supplyFor(bot, context);
-		final SupplyPlanner.Prices prices = context.priceBook().prices(bot.getLevel(), bot.getGearTier(), bot.getClassId());
+		final SupplyPlanner.Prices prices = pricesFor(bot, context);
 		final long escapesLeft = usesEscape(bot, town, context) ? (bot.getEscapes() - 1) : bot.getEscapes();
 		final SupplyPlanner.Purchase supplies = SupplyPlanner.shop(bot.getLevel(), purse(bot), Math.max(0L, escapesLeft), bot.getPotions(), bot.getSoulshots(), bot.getGearTier(), bot.isRewardClaimed(), prices, supply);
 		final long adena = Math.max(0L, purse(bot) - supplies.cost());
@@ -2696,9 +2706,21 @@ public final class ColdLife
 		bot.setGearTier(LivingGear.tierFor(LivingGear.weaponGrade(gear, shop.items()), shop.tierStep()));
 	}
 
+	/** @return the potions it likes to carry: the class's flat stock, or enough for the stock minutes of the potions it needs in its zone (at most {@link #POTION_STOCK_MAX}) when that is more */
+	private static int potionStockOf(ColdBot bot, SupplyPlanner.Params supply)
+	{
+		final int flat = LivingSupplies.potionStockFor(bot.getClassId(), supply.potionStock());
+		if (bot.getPotionRate() <= 0.0)
+		{
+			return flat;
+		}
+		final long wanted = Math.min(POTION_STOCK_MAX, Math.round(Math.ceil((bot.getPotionRate() * supply.soulshotStockMinutes()) / 60.0)));
+		return (int) Math.max(flat, wanted);
+	}
+
 	private static SupplyPlanner.Params supplyFor(ColdBot bot, Context context)
 	{
-		final SupplyPlanner.Params supply = context.supply().withPotionStock(LivingSupplies.potionStockFor(bot.getClassId(), context.supply().potionStock())).withKillsPerMinute(bot.getKillRate()); // its own kill rate, as the zone model last gave it
+		final SupplyPlanner.Params supply = context.supply().withPotionStock(potionStockOf(bot, context.supply())).withKillsPerMinute(bot.getKillRate()); // its own kill rate, as the zone model last gave it
 		// Its hits per kill with the skills it has learned and the shots it fires, as the hunting span last worked them out; before that, the zone model at full skills.
 		final double hits = (bot.getShotsPerKill() > 0.0) ? bot.getShotsPerKill() : shotsPerKill(bot, context.gear(), context.combat(), 1.0, false);
 		if (hits > 0.0)
@@ -2774,6 +2796,49 @@ public final class ColdLife
 		return new ZoneChooser.Situation(level, bot.getRace(), current, town, budget, occupancy, context.travel().zoneCapacity(), avoiding ? risk.avoidZone() : null, freeTeleport(bot, context), bot.getEscapes() > 0, wary, zoneWorth(bot, occupancy, context));
 	}
 
+	/** The share of what it earns that a bot will spend on healing potions. */
+	public static final double POTION_SPEND_SHARE = 0.25;
+	/** The most potions a bot carries (they weigh 5 each). */
+	public static final long POTION_STOCK_MAX = 300L;
+
+	/**
+	 * The shop prices for this bot, with the potion priced for the kind it would drink: the cheapest per HP that keeps up with the
+	 * potions it needs an hour (a Lesser, Healing or Greater potion), counted per unit of the model's potion.
+	 */
+	public static SupplyPlanner.Prices pricesFor(ColdBot bot, Context context)
+	{
+		final SupplyPlanner.Prices listed = context.priceBook().prices(bot.getLevel(), bot.getGearTier(), bot.getClassId());
+		final PriceBook book = context.priceBook();
+		final LivingSupplies.PotionKind kind = LivingSupplies.bestPotion(bot.getLevel(), Math.max(0.0, bot.getPotionRate()), book::listPrice);
+		if (kind == null)
+		{
+			return listed;
+		}
+		return new SupplyPlanner.Prices(LivingSupplies.unitPrice(kind, bot.getLevel(), book.listPrice(kind.itemId())), listed.soulshot(), listed.escape(), listed.nextTier());
+	}
+
+	/**
+	 * Works out how many potions an hour a bot can afford to drink: a share of what it earns, over what a potion costs, and
+	 * never more than the reuse delay allows. Before it has earned anything (a fresh bot) the flat habit applies.
+	 * @param bot the bot
+	 * @param price adena a unit of potion costs
+	 * @return potions an hour, or -1 for no figure yet
+	 */
+	public static double potionCapFor(ColdBot bot, long price)
+	{
+		if ((bot.getIncomeRate() <= 0.0) || (price <= 0L))
+		{
+			return -1.0;
+		}
+		return Math.min(LivingSupplies.potionThroughput(bot.getLevel()), (bot.getIncomeRate() * POTION_SPEND_SHARE) / price);
+	}
+
+	/** @return the most potions an hour this bot drinks: what it can afford once it has earned, else the flat habit for its class */
+	public static double potionCeiling(ColdBot bot, double flatHabit)
+	{
+		return (bot.getPotionCap() >= 0.0) ? bot.getPotionCap() : flatHabit;
+	}
+
 	/** The share of a zone's spawns a bot can practically reach, as the hunting model uses it (RespawnShare). */
 	private static final double ZONE_SHARE = 0.5;
 
@@ -2792,7 +2857,7 @@ public final class ColdLife
 		}
 		final int level = bot.getLevel();
 		final ZoneCombat.Stats stats = statsOf(bot, context.gear(), combat);
-		final double habit = context.travel().potionsPerHour() * LivingSupplies.potionUseFactor(bot.getClassId());
+		final double habit = potionCeiling(bot, context.travel().potionsPerHour() * LivingSupplies.potionUseFactor(bot.getClassId()));
 		final double lossPerDeath = (ColdRisk.expLossPercent(level) / 100.0) * context.expToNext().applyAsLong(level);
 		return zone ->
 		{

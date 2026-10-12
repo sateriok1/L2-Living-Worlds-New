@@ -140,7 +140,7 @@ keeps it.
 | `MoveSpeed` | Cold walking speed (units per second). |
 | `EscapeCastSeconds` / `ErrandStopSeconds` | Scroll of Escape cast time, and time spent at each town NPC. |
 | `AfkChancePercent` / `AfkMinMinutes` / `AfkMaxMinutes` | Chance and length of an AFK break per town visit. |
-| `ColdPotionsPerHour` | Potions a cold melee bot drinks per hour of hunting; tanks drink half again as many, casters, archers and healers half as many. |
+| `ColdPotionsPerHour` | Potions a cold melee bot drinks per hour of hunting before it has earned anything (the starting figure; tanks half again as many, casters, archers and healers half as many). Afterwards a bot drinks what the zone model says it needs, capped by a quarter of its income over the price of a potion and by the 10 second reuse delay; one in a party drinks none. It buys whichever of the Lesser, Healing and Greater potion costs least for the HP it heals and can keep up with its need. Stock follows the same need (up to 300). |
 | `ZoneCapacity` | Bots per zone before it counts as full (0 = no limit). A bot already there moves on only once it is a quarter over. When every zone that fits is full, a bot goes to the least crowded one instead of waiting or walking. |
 | `RetrySeconds` | How long a bot with no way on waits in town before trying again (at least 30). A bot too poor for a gatekeeper walks to the nearest fitting zone instead. |
 | `WalkToTownWithin` | A town closer than this is walked to even with a Scroll of Escape. |

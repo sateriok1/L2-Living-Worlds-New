@@ -108,6 +108,7 @@ public class LivingTravelTest
 		testColdRisk();
 		testColdDeathAndRest();
 		testWaryAfterDeath();
+		testPartyDrinksNoPotions();
 		testMerchantGearErrand();
 		testLivingChat();
 		testClassPath();
@@ -371,6 +372,18 @@ public class LivingTravelTest
 		check("a stay does not move", stay.positionAt(250L).equals(new Point(5, 6, 7)));
 		check("round trip through the row text", TravelLeg.decode(walk.encode()).equals(walk));
 		check("bad text gives no leg", (TravelLeg.decode("1,2,3") == null) && (TravelLeg.decode("a,b,c,d,e,f,g,h") == null) && (TravelLeg.decode(null) == null));
+	}
+
+	private static void testPartyDrinksNoPotions() throws Exception
+	{
+		final ColdLife.Context context = context(0);
+		final ColdBot solo = bot(15, "Near Woods", 20_000L, 100L, 2L, 5000);
+		ColdLife.advance(solo, 3_600_000L, 3_600_000L, context, new ArrayList<>());
+		final ColdBot grouped = bot(15, "Near Woods", 20_000L, 100L, 2L, 5000);
+		grouped.setPartyDeaths(1.0, 0.3);
+		ColdLife.advance(grouped, 3_600_000L, 3_600_000L, context, new ArrayList<>());
+		check("a bot hunting alone drinks potions", solo.getPotions() < 100L);
+		check("one in a party keeps them: its healer keeps it up", grouped.getPotions() == 100L);
 	}
 
 	private static void testTownTripWithScroll() throws Exception
@@ -1913,6 +1926,15 @@ public class LivingTravelTest
 		final long flatTarget = SupplyPlanner.soulshotTarget(true, flatSupply);
 		final long fastTarget = SupplyPlanner.soulshotTarget(true, flatSupply.withKillsPerMinute(flatSupply.killsPerMinute() * 2.0));
 		check("a bot's own kill rate sets its shot stock: a fast killer carries more, none given keeps the flat rate", (fastTarget > flatTarget) && (SupplyPlanner.soulshotTarget(true, flatSupply.withKillsPerMinute(0.0)) == flatTarget));
+		final ColdBot earner = bot(40, "Near Woods", 0L, 0L, 2L, 0);
+		check("a bot that has earned nothing yet has no potion figure and keeps the flat habit", (ColdLife.potionCapFor(earner, 330L) < 0.0) && (ColdLife.potionCeiling(earner, 4.0) == 4.0));
+		earner.setIncomeRate(100_000.0);
+		check("what it can afford to drink is a share of its income over the potion price", Math.abs(ColdLife.potionCapFor(earner, 330L) - ((100_000.0 * ColdLife.POTION_SPEND_SHARE) / 330.0)) < 1e-9);
+		earner.setIncomeRate(5_000_000.0);
+		check("and never past the potion reuse delay", ColdLife.potionCapFor(earner, 330L) == LivingSupplies.potionThroughput(earner.getLevel()));
+		earner.setIncomeRate(1_000.0);
+		earner.setPotionCap(ColdLife.potionCapFor(earner, 330L));
+		check("a poor earner drinks fewer than the flat habit", ColdLife.potionCeiling(earner, 4.0) < 1.0);
 		brokeRaider.setShotsPerKill(-2.0);
 		check("a shots-per-kill figure is never negative", brokeRaider.getShotsPerKill() == 0.0);
 		brokeRaider.setKillRate(-5.0);
@@ -2518,6 +2540,16 @@ public class LivingTravelTest
 		// Potions: no stock means none for anyone, and light classes drink in step with what they carry.
 		check("no potion stock gives light classes none either", (LivingSupplies.potionStockFor(10, 0) == 0) && (LivingSupplies.potionStockFor(9, 1) == 1));
 		check("potion use follows the role", (LivingSupplies.potionUseFactor(4) == 1.5) && (LivingSupplies.potionUseFactor(0) == 1.0) && (LivingSupplies.potionUseFactor(10) == 0.5) && (LivingSupplies.potionUseFactor(9) == 0.5));
+
+		// Which potion to drink: the cheapest per HP that keeps up with the need (prices as in the item data: 90 / 330 / 900).
+		final java.util.function.IntToLongFunction shopPrice = id -> (id == 1060) ? 90L : (id == 1061) ? 330L : (id == 1539) ? 900L : 0L;
+		check("a small need takes the potion cheapest for its HP", LivingSupplies.bestPotion(40, 50.0, shopPrice).itemId() == 1060);
+		check("a need the small potion cannot keep up with takes the next", LivingSupplies.bestPotion(40, 200.0, shopPrice).itemId() == 1061);
+		check("a need only the biggest keeps up with takes the Greater potion", LivingSupplies.bestPotion(40, 500.0, shopPrice).itemId() == 1539);
+		check("below level 20 only the Lesser potion", LivingSupplies.bestPotion(12, 500.0, shopPrice).itemId() == 1060);
+		check("no price known gives none", LivingSupplies.bestPotion(40, 50.0, id -> 0L) == null);
+		check("a unit of potion costs the HP it heals over the potion's", (LivingSupplies.unitPrice(LivingSupplies.bestPotion(40, 200.0, shopPrice), 40, 330L) == 330L) && (LivingSupplies.unitPrice(LivingSupplies.bestPotion(40, 50.0, shopPrice), 40, 90L) == 270L) && (LivingSupplies.unitPrice(LivingSupplies.bestPotion(40, 500.0, shopPrice), 40, 900L) == 432L));
+		check("the reuse delay caps the units an hour by the biggest potion", (LivingSupplies.potionThroughput(40) == 750.0) && (LivingSupplies.potionThroughput(12) == 360.0));
 
 		// Mystics fire spiritshots of their grade, at their own rate.
 		check("mystics are told apart from archers", LivingSupplies.isMystic(10) && !LivingSupplies.isMystic(9) && LivingSupplies.isLight(9));

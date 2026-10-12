@@ -193,6 +193,88 @@ public final class LivingSupplies
 		return 5;
 	}
 
+	public static final int GREATER_HEALING_POTION = 1539;
+
+	/** A healing potion: its item and the HP it heals (power a second over its 15 seconds). */
+	public record PotionKind(int itemId, double heal)
+	{
+	}
+
+	private static final PotionKind[] POTION_KINDS =
+	{
+		new PotionKind(LESSER_HEALING_POTION, 120.0),
+		new PotionKind(HEALING_POTION, 360.0),
+		new PotionKind(GREATER_HEALING_POTION, 750.0)
+	};
+
+	/** Seconds between two potions of the same kind (their reuse delay). */
+	private static final double POTION_REUSE_SECONDS = 10.0;
+
+	/**
+	 * @param level bot level
+	 * @return the HP of the potion the cold model counts in: a Lesser Healing Potion below level 20, a Healing Potion from there. The bot's potions are counted in these
+	 */
+	public static double unitHeal(int level)
+	{
+		return (level < 20) ? 120.0 : 360.0;
+	}
+
+	/**
+	 * @param level bot level
+	 * @return the most potions (in units) a bot can drink in an hour, with the biggest potion it uses and the reuse delay
+	 */
+	public static double potionThroughput(int level)
+	{
+		final double biggest = (level < 20) ? POTION_KINDS[0].heal() : POTION_KINDS[POTION_KINDS.length - 1].heal();
+		return (3600.0 / POTION_REUSE_SECONDS) * biggest / unitHeal(level);
+	}
+
+	/**
+	 * Which potion to drink: the one that costs least for the HP it heals, among those that can heal what the bot needs in an
+	 * hour at their reuse delay (a small potion cannot keep up with a big need); when none can, the biggest. Below level 20 only the Lesser potion.
+	 * @param level bot level
+	 * @param unitsPerHour the potions an hour (in units) the bot needs
+	 * @param priceOf the shop price of an item, 0 when unknown
+	 * @return the kind, or null when no price is known
+	 */
+	public static PotionKind bestPotion(int level, double unitsPerHour, java.util.function.IntToLongFunction priceOf)
+	{
+		if (level < 20)
+		{
+			return (priceOf.applyAsLong(POTION_KINDS[0].itemId()) > 0L) ? POTION_KINDS[0] : null;
+		}
+		final double needHp = Math.max(0.0, unitsPerHour) * unitHeal(level);
+		PotionKind best = null;
+		double bestCost = Double.POSITIVE_INFINITY;
+		PotionKind biggest = null;
+		for (PotionKind kind : POTION_KINDS)
+		{
+			final long price = priceOf.applyAsLong(kind.itemId());
+			if (price <= 0L)
+			{
+				continue;
+			}
+			biggest = kind;
+			if (((3600.0 / POTION_REUSE_SECONDS) * kind.heal()) < needHp)
+			{
+				continue;
+			}
+			final double perHp = price / kind.heal();
+			if (perHp < bestCost)
+			{
+				bestCost = perHp;
+				best = kind;
+			}
+		}
+		return (best != null) ? best : biggest;
+	}
+
+	/** @return what one unit of potion (see {@link #unitHeal}) costs when bought as this kind at that shop price: its HP over the potion's, rounded up */
+	public static long unitPrice(PotionKind kind, int level, long price)
+	{
+		return (long) Math.ceil((price * unitHeal(level)) / kind.heal());
+	}
+
 	/**
 	 * @param level the bot level
 	 * @return the healing potion it buys: Lesser Healing Potion below level 20, Healing Potion from 20
