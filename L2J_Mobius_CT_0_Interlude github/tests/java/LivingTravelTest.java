@@ -641,6 +641,24 @@ public class LivingTravelTest
 		runUntil(warrior, 1L, context, new ArrayList<>(), b -> !ColdLife.IN_TOWN.equals(b.getActivity()));
 		check("an Artisan that is not Sateya does not craft", !ColdLife.CRAFTING.equals(warrior.getActivity()) && (warrior.getRecipes() == 0));
 
+		// Nobody else takes the Merchant's decisions: a bot named Sateya that is not yet an Artisan does not craft either,
+		// and a bot with another name never changes into an Artisan by her rule.
+		final ColdBot girl = bot(12, "Hunt", 100_000L, 10L, 2L, 0);
+		girl.setName("Sateya");
+		girl.setClassId(53);
+		girl.setTown("Giran");
+		girl.setActivity(ColdLife.IN_TOWN);
+		girl.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		runUntil(girl, 1L, context, new ArrayList<>(), b -> !ColdLife.IN_TOWN.equals(b.getActivity()));
+		check("Sateya as a young Dwarven Fighter keeps hunting", !ColdLife.CRAFTING.equals(girl.getActivity()) && (girl.getRecipes() == 0));
+		int artisans = 0;
+		for (long id = 1; id <= 200; id++)
+		{
+			artisans += (ClassPath.next(53, id, "Dwarf" + id) == 56) ? 1 : 0;
+		}
+		check("other dwarves still pick their class by id, so not all become Artisans", (artisans > 0) && (artisans < 200));
+		check("the Merchant's class path is Artisan then Warsmith", (ClassPath.next(56, 1L, "Sateya") == 57));
+
 		final ColdBot saved = new ColdBot();
 		saved.setStatsJson(merchant.getStatsJson());
 		merchant.setCarry(1463, 500L, "Gludio");
