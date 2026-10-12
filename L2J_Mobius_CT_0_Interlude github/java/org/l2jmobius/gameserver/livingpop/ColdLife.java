@@ -862,12 +862,7 @@ public final class ColdLife
 		{
 			return false;
 		}
-		final long pay = freeTeleport(bot, context) ? 0L : fee;
-		if ((pay + context.supply().reserveFloor()) > bot.getAdena())
-		{
-			return false;
-		}
-		bot.setAdena(bot.getAdena() - pay);
+		final long pay = 0L; // a true merchant moves its money and goods by alt and warehouse: no gatekeeper fee between towns
 		bot.setTown(dest.name());
 		bot.setActivity(TO_TOWN);
 		bot.setLeg(TravelLeg.stay(dest.arrival(), now, context.travel().escapeCastMs()));
@@ -900,14 +895,13 @@ public final class ColdLife
 		final String sale = (bot.getCarryTown() == null) ? giran.name() : bot.getCarryTown();
 		final Town dest = context.catalog().town(sale);
 		final long fee = (dest == null) ? -1L : giran.feeTo(sale);
-		final long pay = freeTeleport(bot, context) ? 0L : fee;
-		if (sale.equals(giran.name()) || (fee < 0L) || (pay > bot.getAdena()))
+		final long pay = 0L; // the Merchant's trips between towns cost no gatekeeper fee
+		if (sale.equals(giran.name()) || (fee < 0L))
 		{
 			listCarry(bot, context, events);
 			leaveTown(bot, now, context, events);
 			return;
 		}
-		bot.setAdena(bot.getAdena() - pay);
 		bot.setTown(dest.name());
 		bot.setActivity(DELIVERING);
 		bot.setLeg(TravelLeg.stay(dest.arrival(), now, context.travel().escapeCastMs()));

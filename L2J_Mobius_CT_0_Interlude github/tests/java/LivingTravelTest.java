@@ -659,6 +659,20 @@ public class LivingTravelTest
 		check("other dwarves still pick their class by id, so not all become Artisans", (artisans > 0) && (artisans < 200));
 		check("the Merchant's class path is Artisan then Warsmith", (ClassPath.next(56, 1L, "Sateya") == 57));
 
+		// Above the free-teleport level the Merchant still pays no fee between towns (alt and warehouse), only the isle.
+		final ColdBot rich = bot(45, "Hunt", 100_000L, 10L, 2L, 0);
+		rich.setClassId(118);
+		rich.setName("Sateya");
+		rich.setRecipes(ShotCrafting.bit(ssD));
+		bought.clear();
+		rich.setTown("Gludio");
+		rich.setActivity(ColdLife.IN_TOWN);
+		rich.setLeg(TravelLeg.stay(new Point(100_000, 0, 0), 0L, 0L));
+		final List<DecisionLog.Event> richLog = new ArrayList<>();
+		runUntil(rich, 1L, context, richLog, b -> ColdLife.CRAFTING.equals(b.getActivity()));
+		check("it went to Giran for the materials at no gatekeeper cost", richLog.stream().anyMatch(e -> e.text().contains("Goes to Giran") && e.text().contains("gatekeeper 0 adena")));
+		check("only the gatekeeper to the isle was paid", ColdLife.CRAFTING.equals(rich.getActivity()) && (rich.getAdena() >= (100_000L - 18_473L - 5_700L - 2_000L)));
+
 		final ColdBot saved = new ColdBot();
 		saved.setStatsJson(merchant.getStatsJson());
 		merchant.setCarry(1463, 500L, "Gludio");
