@@ -199,6 +199,9 @@ public class PhantomPartyManager
 	private static final Pattern SIT_ORDER = Pattern.compile("\\bsit(?:\\s+down)?\\b"); // "sit" / "sit down" as a whole word, not "sitting" or "situation"
 	private static final long STAND_SUPPRESS = 30000; // a "stand" order keeps it on its feet this long before auto-rest resumes
 	private static final long OFFLINE_GRACE = 120000;
+	// A member found outside its owner's party is put back into it for this long before it is let go (a stale or lost party flag
+	// must not make a recruit vanish a second after it joined).
+	private static final long PARTY_LOST_GRACE = 5000;
 	private static final long BRB_GRACE = 360000;
 	private static final long CORPSE_GRACE = 60000; // keep a fallen member as a raisable corpse this long before despawning it
 	private static final int RES_CLAIM_MS = 4500; // one rezzer claims a corpse long enough for the cast/request to land
@@ -527,6 +530,7 @@ public class PhantomPartyManager
 		int stuckTicks;
 		long castSince; // abort a wedged cast instead of freezing the member
 		long travelUntil; // sent ahead to a destination; wait there (don't follow-yank back) until the leader arrives
+		long partyLostAt; // when the member and its owner were first seen in different parties (0 = in the same one); see PARTY_LOST_GRACE
 		boolean rebuffing; // "rebuff" order: recast the full kit regardless of time left
 		int rebuffIdx; // which buff in the list is next for the current target
 		int rebuffRefusals; // consecutive native refusals of the current rebuff buff (skipped at REBUFF_MAX_REFUSALS)
@@ -801,10 +805,14 @@ public class PhantomPartyManager
 		int incoming = 0;
 		for (Member m : _members.values())
 		{
-			if ((m.owner == leader) && !m.partied)
+			if ((m.owner == leader) && !m.partied && !m.npc.isDead() && (World.getInstance().findObject(m.npc.getObjectId()) != null))
 			{
 				incoming++;
 			}
+		}
+		if ((cap - incoming) <= 0)
+		{
+			LOGGER.info("Recruit shout from " + leader.getName() + " answered 'party is full': " + (leader.isInParty() ? ("party of " + leader.getParty().getMemberCount()) : "no party") + ", " + incoming + " recruits already on their way");
 		}
 		return cap - incoming;
 	}
@@ -1013,16 +1021,35 @@ public class PhantomPartyManager
 	public boolean onInvited(Player owner, Player member)
 	{
 		final Member state = _members.get(member.getObjectId());
-		if ((state == null) || (owner == null) || member.isDead() || member.isInParty())
+		if ((state == null) || (owner == null) || member.isDead())
 		{
+			LOGGER.info("Recruit invite refused: " + (member == null ? "?" : member.getName()) + (state == null ? " is not a recruit any more" : (owner == null ? " has no inviter" : " is dead")));
 			return false;
+		}
+		if (member.isInParty())
+		{
+			if (state.partied && isPartiedWith(state))
+			{
+				LOGGER.info("Recruit invite ignored: " + member.getName() + " is already in " + owner.getName() + "'s party");
+				return false;
+			}
+			// A recruit that is still waiting for its invite is in no party. A party flag on it is left over from something else, so clear it.
+			LOGGER.info("Recruit " + member.getName() + " had a stale party flag (not partied yet); clearing it before the invite from " + owner.getName());
+			leaveParty(member);
 		}
 		try
 		{
+			// A party the inviter is in that has only the inviter left is a leftover (a party ends at one member): drop it and start fresh.
+			if (owner.isInParty() && (owner.getParty().getMemberCount() <= 1))
+			{
+				LOGGER.info("Inviter " + owner.getName() + " had a stale one-member party; clearing it before the recruit joins");
+				leaveParty(owner);
+			}
 			// Only a solo player or the party leader can add someone, never past the size cap (FPC-110). The invite
 			// packet checks this for real players; a clientless member is joined here, so it is checked again.
 			if (owner.isInParty() && !TownFakeInviteRules.mayAddMember(true, owner.getParty().isLeader(owner), owner.getParty().getMemberCount()))
 			{
+				LOGGER.info("Recruit invite refused: " + owner.getName() + " is in a party " + (owner.getParty().isLeader(owner) ? "that is full" : "he does not lead") + " (" + owner.getParty().getMemberCount() + " members)");
 				return false;
 			}
 			if (!owner.isInParty())
@@ -2621,8 +2648,30 @@ public class PhantomPartyManager
 
 		if (!isPartiedWith(state))
 		{
-			release(state, false);
-			return false;
+			// Not in its owner's party: put it back if the owner still has one, and only let it go if that does not work for a few seconds.
+			if (state.partyLostAt == 0)
+			{
+				state.partyLostAt = now;
+				LOGGER.info("Recruit " + npc.getName() + " is not in " + (owner == null ? "its owner's" : owner.getName() + "'s") + " party (it: " + describeParty(npc) + ", owner: " + describeParty(owner) + "); trying to put it back");
+			}
+			if (repairParty(state))
+			{
+				state.partyLostAt = 0;
+			}
+			else if ((now - state.partyLostAt) >= PARTY_LOST_GRACE)
+			{
+				LOGGER.info("Recruit " + npc.getName() + " released: still not in its owner's party after " + (PARTY_LOST_GRACE / 1000) + "s");
+				release(state, false);
+				return false;
+			}
+			else
+			{
+				return true;
+			}
+		}
+		else
+		{
+			state.partyLostAt = 0;
 		}
 		// Expire Hold Fire against its captured encounters even while the leader keeps a raid selected or changes modes.
 		state.rescueHold.blocked(PhantomPartyManager::raidEncounterActive);
@@ -8730,6 +8779,65 @@ public class PhantomPartyManager
 			}
 		}
 		return false;
+	}
+
+	/** Takes a player out of whatever party it is in (best effort). */
+	private static void leaveParty(Player player)
+	{
+		try
+		{
+			if ((player != null) && player.isInParty())
+			{
+				player.getParty().removePartyMember(player, PartyMessageType.LEFT);
+			}
+		}
+		catch (Exception e)
+		{
+			LOGGER.warning("PhantomPartyManager: could not clear a stale party on " + player.getName() + ": " + e.getMessage());
+		}
+	}
+
+	/** @return "no party" or the party's size and leader, for the log */
+	private static String describeParty(Player player)
+	{
+		if ((player == null) || !player.isInParty())
+		{
+			return "no party";
+		}
+		final Party party = player.getParty();
+		return party.getMemberCount() + " members, leader " + ((party.getLeader() == null) ? "?" : party.getLeader().getName());
+	}
+
+	/**
+	 * Puts a member that fell out of its owner's party back into it, when the owner still has one with room.
+	 * @return whether the member is in its owner's party now
+	 */
+	private boolean repairParty(Member state)
+	{
+		final Player owner = state.owner;
+		final Player npc = state.npc;
+		if ((owner == null) || !owner.isOnline() || !owner.isInParty() || npc.isDead())
+		{
+			return false;
+		}
+		try
+		{
+			if (npc.isInParty() && (npc.getParty() != owner.getParty()))
+			{
+				leaveParty(npc);
+			}
+			if (!npc.isInParty() && (owner.getParty().getMemberCount() < 9))
+			{
+				npc.joinParty(owner.getParty());
+				LOGGER.info("Recruit " + npc.getName() + " put back into " + owner.getName() + "'s party");
+			}
+		}
+		catch (Exception e)
+		{
+			LOGGER.warning("PhantomPartyManager: could not put " + npc.getName() + " back into the party: " + e.getMessage());
+			return false;
+		}
+		return isPartiedWith(state);
 	}
 
 	private boolean isPartiedWith(Member state)
