@@ -30,6 +30,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
+import java.util.concurrent.ConcurrentHashMap;
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -190,6 +191,7 @@ public final class ZoneCatalog
 	private final List<Town> _towns;
 	private final List<Zone> _zones;
 	private final List<Island> _islands;
+	private final Map<String, Map<String, Long>> feeCache = new ConcurrentHashMap<>();
 
 	public ZoneCatalog(List<Town> towns, List<Zone> zones)
 	{
@@ -339,13 +341,35 @@ public final class ZoneCatalog
 	 */
 	public Town masterTown(String script, Town from)
 	{
+		final Route route = masterRoute(script, from);
+		return (route == null) ? null : route.first();
+	}
+
+	/**
+	 * The whole gatekeeper trip to a class master, worked out before the bot sets out.
+	 * @param first the next town on the way (this town when it has the master)
+	 * @param last the town with the master
+	 * @param fee the fees of every hop from here to {@code last} added up
+	 */
+	public record Route(Town first, Town last, long fee)
+	{
+	}
+
+	/**
+	 * The cheapest gatekeeper route (by total fee) from a town to one that has this class master.
+	 * @param script the class master's script
+	 * @param from the town the bot is in
+	 * @return the route (free when this town has the master), or null when no town with the master can be reached at all
+	 */
+	public Route masterRoute(String script, Town from)
+	{
 		if ((script == null) || (from == null))
 		{
 			return null;
 		}
 		if (from.master(script) != null)
 		{
-			return from;
+			return new Route(from, from, 0L);
 		}
 		// The cheapest route by fee (Dijkstra), remembering the first stop of each.
 		final Map<String, Long> cost = new HashMap<>();
@@ -367,7 +391,7 @@ public final class ZoneCatalog
 			}
 			if ((here != from) && (here.master(script) != null))
 			{
-				return town(first.get(here.name()));
+				return new Route(town(first.get(here.name())), here, head.getValue());
 			}
 			for (Map.Entry<String, Long> route : here.routes().entrySet())
 			{
@@ -386,6 +410,85 @@ public final class ZoneCatalog
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * The nearest town with this class master that a bot can walk to from a town: on the same land, however far. What a bot
+	 * too poor for the gatekeepers does.
+	 * @param script the class master's script
+	 * @param from the town the bot is in
+	 * @return this town when it has the master, otherwise the nearest such town on its land, or null when there is none
+	 */
+	public Town walkableMasterTown(String script, Town from)
+	{
+		if ((script == null) || (from == null))
+		{
+			return null;
+		}
+		if (from.master(script) != null)
+		{
+			return from;
+		}
+		Town best = null;
+		double bestDistance = Double.MAX_VALUE;
+		for (Town candidate : towns())
+		{
+			if ((candidate.master(script) == null) || !sameLand(from.arrival(), candidate.arrival()))
+			{
+				continue;
+			}
+			final double distance = from.arrival().distance(candidate.arrival());
+			if (distance < bestDistance)
+			{
+				best = candidate;
+				bestDistance = distance;
+			}
+		}
+		return best;
+	}
+
+	/**
+	 * The cheapest total gatekeeper fee from a town to every town it can reach through any chain of gatekeepers (itself at
+	 * nothing). Worked out once per town: the catalog does not change after it is loaded.
+	 * @param from the town
+	 * @return the fee to each reachable town by name
+	 */
+	public Map<String, Long> feesFrom(Town from)
+	{
+		return feeCache.computeIfAbsent(from.name(), name ->
+		{
+			final Map<String, Long> cost = new HashMap<>();
+			final PriorityQueue<Map.Entry<String, Long>> queue = new PriorityQueue<>(Map.Entry.comparingByValue());
+			cost.put(name, 0L);
+			queue.add(Map.entry(name, 0L));
+			while (!queue.isEmpty())
+			{
+				final Map.Entry<String, Long> head = queue.poll();
+				if (head.getValue() > cost.getOrDefault(head.getKey(), Long.MAX_VALUE))
+				{
+					continue;
+				}
+				final Town here = town(head.getKey());
+				if (here == null)
+				{
+					continue;
+				}
+				for (Map.Entry<String, Long> route : here.routes().entrySet())
+				{
+					if ((town(route.getKey()) == null) || (route.getValue() < 0))
+					{
+						continue;
+					}
+					final long total = head.getValue() + route.getValue();
+					if (total < cost.getOrDefault(route.getKey(), Long.MAX_VALUE))
+					{
+						cost.put(route.getKey(), total);
+						queue.add(Map.entry(route.getKey(), total));
+					}
+				}
+			}
+			return Collections.unmodifiableMap(cost);
+		});
 	}
 
 	/**

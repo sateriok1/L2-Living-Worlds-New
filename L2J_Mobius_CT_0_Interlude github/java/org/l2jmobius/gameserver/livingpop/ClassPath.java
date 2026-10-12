@@ -229,6 +229,11 @@ public final class ClassPath
 				}
 			}
 		}
+		// aiTeras: a dwarf who wants to be a spoiler: a Scavenger, then a Bounty Hunter and a Fortune Seeker.
+		if (ColdSeedPlan.FRIEND.equalsIgnoreCase(name) && (classId == 53))
+		{
+			return 54;
+		}
 		// aiSonOfZion: a Mystic who becomes a Cleric and a Bishop, or an Orc Fighter who becomes a Raider (then Destroyer and Titan).
 		if (ColdSeedPlan.ZION.equalsIgnoreCase(name))
 		{

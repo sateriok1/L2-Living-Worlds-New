@@ -457,6 +457,10 @@ public final class ColdLife
 		}
 		final Town errandTown = ColdLife.IN_TOWN.equals(activity) ? context.catalog().town(bot.getTown()) : null;
 		moveTo(bot, (errandTown != null) ? errandPosition(errandTown, leg.from(), leg.startAt(), now, context.travel()) : leg.positionAt(now));
+		if (cutShortForClassChange(bot, activity, leg, now, context, events))
+		{
+			return;
+		}
 		if (!leg.done(now))
 		{
 			return;
@@ -551,7 +555,11 @@ public final class ColdLife
 			case DELIVERING:
 			{
 				listCarry(bot, context, events);
-				leaveTown(bot, now, context, events);
+				// Crafting trips come before the trainer in the town errands, so the skills it has waiting are learned now.
+				if (!visitTrainer(bot, context.catalog().town(bot.getTown()), now, context, events))
+				{
+					leaveTown(bot, now, context, events);
+				}
 				break;
 			}
 			case GEAR_SHOP:
@@ -588,6 +596,45 @@ public final class ColdLife
 	public static boolean classChangePending(ColdBot bot, Context life)
 	{
 		return (life.classQuestMs() != null) && ((bot.getQuest() != null) || ClassPath.due(bot.getClassId(), bot.getLevel()));
+	}
+
+	/**
+	 * A class change that falls due while the bot is on its way to a zone, resting or on a break ends that early: the bot
+	 * does not wait for the next hunting tick to notice. Only when it can set out for the master (it can afford the way or run).
+	 * @return whether the bot's trip was cut short and the step is handled
+	 */
+	private static boolean cutShortForClassChange(ColdBot bot, String activity, TravelLeg leg, long now, Context context, List<DecisionLog.Event> events)
+	{
+		if ((context.classQuestMs() == null) || !(AFK.equals(activity) || RESTING.equals(activity) || TO_ZONE.equals(activity)))
+		{
+			return false;
+		}
+		progressClassQuest(bot, now, context, events);
+		final ClassPath.Quest quest = bot.getQuest();
+		if ((quest == null) || !quest.needsMaster())
+		{
+			return false;
+		}
+		final boolean onBreak = AFK.equals(activity);
+		final Town town = onBreak ? context.catalog().town(bot.getTown()) : townFor(bot, context.catalog().zone(bot.getZone()), context.catalog());
+		if ((town == null) || (classErrand(bot, town, context)[1] != null))
+		{
+			return false;
+		}
+		if (onBreak)
+		{
+			events.add(new DecisionLog.Event(null, "Its class change is due: ends its break early"));
+			return visitClassMaster(bot, town, now, context, events);
+		}
+		// On the way to a zone, or resting in one: it stops where it is and hunts, which lets the planner send it to the master.
+		events.add(new DecisionLog.Event(null, "Its class change is due: ends " + (TO_ZONE.equals(activity) ? ("its trip to " + bot.getZone()) : "its rest") + " early"));
+		if (TO_ZONE.equals(activity))
+		{
+			moveTo(bot, leg.to());
+		}
+		bot.setLeg(null);
+		bot.setActivity(HUNTING);
+		return true;
 	}
 
 	private static void hunt(ColdBot bot, long now, long elapsedMs, Context context, List<DecisionLog.Event> events)
@@ -633,6 +680,15 @@ public final class ColdLife
 			if ((choice != null) && ((zone == null) || !choice.zone().name().equals(zone.name())))
 			{
 				betterZone = choice.zone().name();
+			}
+			else if ((choice == null) && (zone != null) && (bot.getLevel() > (zone.maxLevel() + ZoneChooser.OUTLEVEL_SLACK)))
+			{
+				// Outleveled and too poor for any gatekeeper: a zone that fits on its own land is still a walk away.
+				final ZoneChooser.Choice walk = ZoneChooser.walkFallback(situation(bot, zone, town, budget, now, context), catalog);
+				if ((walk != null) && walk.zone().fits(bot.getLevel()) && !walk.zone().name().equals(zone.name()))
+				{
+					betterZone = walk.zone().name();
+				}
 			}
 		}
 
@@ -961,6 +1017,10 @@ public final class ColdLife
 			return;
 		}
 
+		// Whatever brought it to town (a hunting trip, a death, a raid whose experience made levels), it looks at its class
+		// change again before anything else: the quest may have fallen due while it was away from hunting.
+		progressClassQuest(bot, now, context, events);
+
 		// Sell the loot gathered while hunting, then shop at the grocer with the proceeds.
 		if (bot.getLoot() > 0)
 		{
@@ -974,34 +1034,20 @@ public final class ColdLife
 		}
 		sellOldShots(bot, town, context, events);
 
-		// Its class change comes before any shopping, so what it buys cannot eat the money for the way to the class master.
+		// Its class change comes before any shopping, and what it buys cannot eat the money for the way to the class master:
+		// the fees of the whole route stay in the purse and only the rest buys supplies, potions on the way.
+		final long hold = classTripHold(bot, town, context);
+		if (hold > 0L)
+		{
+			shopAtGrocer(bot, town, context, events, hold);
+		}
 		if (visitClassMaster(bot, town, now, context, events))
 		{
 			return;
 		}
-		if (town.hasGrocer())
+		if (hold <= 0L)
 		{
-			final SupplyPlanner.Prices listed = context.priceBook().prices(bot.getLevel(), bot.getGearTier(), bot.getClassId());
-			// The grocer does not sell D and better shots: those come from the Merchant's shops, below.
-			final SupplyPlanner.Prices prices = buysShotsInShops(bot, context) ? new SupplyPlanner.Prices(listed.potion(), NO_GROCER_SHOTS, listed.escape(), listed.nextTier()) : listed;
-			final SupplyPlanner.Params supply = supplyFor(bot, context);
-			final SupplyPlanner.Purchase bought = SupplyPlanner.shop(bot.getLevel(), bot.getAdena(), bot.getEscapes(), bot.getPotions(), bot.getSoulshots(), bot.getGearTier(), bot.isRewardClaimed(), prices, supply);
-			if (bought.any())
-			{
-				bot.setAdena(Math.max(0L, bot.getAdena() - bought.cost()));
-				bot.setEscapes(bot.getEscapes() + bought.escapes());
-				bot.setPotions(bot.getPotions() + bought.potions());
-				bot.setSoulshots(bot.getSoulshots() + bought.soulshots());
-				if (bought.upgraded())
-				{
-					bot.setGearTier(bot.getGearTier() + 1);
-				}
-				events.add(new DecisionLog.Event(null, "Shopped in " + town.name() + ": " + describe(bought, bot.getGearTier(), LivingSupplies.isMystic(bot.getClassId())) + " for " + DecisionLog.num(bought.cost()) + " adena (keeps " + DecisionLog.num(SupplyPlanner.reserve(bot.getLevel(), bot.getAdena() + bought.cost(), supply)) + " in reserve)"));
-			}
-			else
-			{
-				events.add(new DecisionLog.Event(null, "Nothing it can afford in " + town.name() + " right now"));
-			}
+			shopAtGrocer(bot, town, context, events, 0L);
 		}
 
 		// D and better shots come from the Merchant's shops, in Gludio (D) and Giran (C).
@@ -1047,6 +1093,62 @@ public final class ColdLife
 			return;
 		}
 		leaveTown(bot, now, context, events);
+	}
+
+	/**
+	 * Adena a bot keeps out of the shops for its class master: the fees of the whole gatekeeper route and the reserve floor.
+	 * Nothing when the master is in this town, the gatekeepers are free for it, or it cannot cover the route anyway (it runs).
+	 */
+	private static long classTripHold(ColdBot bot, Town town, Context context)
+	{
+		final ClassPath.Quest quest = bot.getQuest();
+		if ((context.classQuestMs() == null) || (quest == null) || !quest.needsMaster() || freeTeleport(bot, context))
+		{
+			return 0L;
+		}
+		final String script = ClassPath.master(bot.getClassId(), quest.target());
+		if ((script == null) || (town.master(script) != null))
+		{
+			return 0L;
+		}
+		final ZoneCatalog.Route route = context.catalog().masterRoute(script, town);
+		if ((route == null) || (route.fee() <= 0L))
+		{
+			return 0L;
+		}
+		final long hold = route.fee() + context.supply().reserveFloor();
+		return (hold <= bot.getAdena()) ? hold : 0L;
+	}
+
+	/** Buys supplies at the grocer with what is left after {@code hold}, which stays in the purse. */
+	private static void shopAtGrocer(ColdBot bot, Town town, Context context, List<DecisionLog.Event> events, long hold)
+	{
+		if (!town.hasGrocer())
+		{
+			return;
+		}
+		final long spendable = Math.max(0L, bot.getAdena() - hold);
+		final SupplyPlanner.Prices listed = context.priceBook().prices(bot.getLevel(), bot.getGearTier(), bot.getClassId());
+		// The grocer does not sell D and better shots: those come from the Merchant's shops.
+		final SupplyPlanner.Prices prices = buysShotsInShops(bot, context) ? new SupplyPlanner.Prices(listed.potion(), NO_GROCER_SHOTS, listed.escape(), listed.nextTier()) : listed;
+		final SupplyPlanner.Params supply = supplyFor(bot, context);
+		final SupplyPlanner.Purchase bought = SupplyPlanner.shop(bot.getLevel(), spendable, bot.getEscapes(), bot.getPotions(), bot.getSoulshots(), bot.getGearTier(), bot.isRewardClaimed(), prices, supply);
+		if (bought.any())
+		{
+			bot.setAdena(Math.max(0L, bot.getAdena() - bought.cost()));
+			bot.setEscapes(bot.getEscapes() + bought.escapes());
+			bot.setPotions(bot.getPotions() + bought.potions());
+			bot.setSoulshots(bot.getSoulshots() + bought.soulshots());
+			if (bought.upgraded())
+			{
+				bot.setGearTier(bot.getGearTier() + 1);
+			}
+			events.add(new DecisionLog.Event(null, "Shopped in " + town.name() + ": " + describe(bought, bot.getGearTier(), LivingSupplies.isMystic(bot.getClassId())) + " for " + DecisionLog.num(bought.cost()) + " adena (keeps " + DecisionLog.num(SupplyPlanner.reserve(bot.getLevel(), spendable, supply)) + " in reserve" + ((hold > 0L) ? (" and " + DecisionLog.num(hold) + " for the way to its class master") : "") + ")"));
+		}
+		else
+		{
+			events.add(new DecisionLog.Event(null, "Nothing it can afford in " + town.name() + " right now"));
+		}
 	}
 
 	/**
@@ -1218,10 +1320,10 @@ public final class ColdLife
 		return errand;
 	}
 
-	/** @return whether this class can craft the dwarven shot recipes (Artisan and Warsmith); only the Merchant, Sateya, does */
+	/** @return whether this class can craft the dwarven shot recipes (Artisan, Warsmith and Maestro: the Merchant's whole class path); only the Merchant, Sateya, does */
 	public static boolean isCrafter(int classId)
 	{
-		return (classId == 56) || (classId == 118);
+		return (classId == 56) || (classId == 57) || (classId == 118);
 	}
 
 	/**
@@ -1552,7 +1654,10 @@ public final class ColdLife
 		if (sale.equals(giran.name()) || (fee < 0L))
 		{
 			listCarry(bot, context, events);
-			leaveTown(bot, now, context, events);
+			if (!visitTrainer(bot, giran, now, context, events))
+			{
+				leaveTown(bot, now, context, events);
+			}
 			return;
 		}
 		bot.setTown(dest.name());
@@ -1646,21 +1751,39 @@ public final class ColdLife
 		};
 	}
 
-	/** @return why the bot cannot reach this master from its town, or null when it can */
+	/** @return whether a bot too poor for the gatekeepers runs to this master: its class change is worth the walk, a few skills are not */
+	private static boolean mayRun(String what)
+	{
+		return "class master".equals(what);
+	}
+
+	/**
+	 * Works out the whole trip to a master before the bot sets out.
+	 * @return why the bot cannot reach this master from its town, or null when it can: by gatekeeper (free, or the fees of
+	 *         every hop and the reserve floor are in its purse) or, failing that, on foot to a master on its land
+	 */
 	private static String masterBlocker(String script, String what, ColdBot bot, Town town, Context context)
 	{
-		final Town masterTown = context.catalog().masterTown(script, town);
-		if ((town == null) || (masterTown == null))
+		if (town == null)
 		{
 			return "no " + what + " it can reach";
 		}
-		// A bot the gatekeepers teleport for free needs no money for the way. Otherwise the fee leaves at least the reserve
-		// floor, the money it leaves the master's town with for the way back out.
-		if ((masterTown != town) && !freeTeleport(bot, context) && ((town.feeTo(masterTown.name()) + context.supply().reserveFloor()) > purse(bot)))
+		final ZoneCatalog.Route route = context.catalog().masterRoute(script, town);
+		if ((route != null) && (route.last() == town))
 		{
-			return "cannot afford the gatekeeper to " + masterTown.name();
+			return null;
 		}
-		return null;
+		// A bot the gatekeepers teleport for free needs no money for the way. Otherwise the fees of the whole route leave at
+		// least the reserve floor, the money it leaves the master's town with for the way back out.
+		if ((route != null) && (freeTeleport(bot, context) || ((route.fee() + context.supply().reserveFloor()) <= purse(bot))))
+		{
+			return null;
+		}
+		if (mayRun(what) && (context.catalog().walkableMasterTown(script, town) != null))
+		{
+			return null; // too poor for the gatekeepers: it can still run there
+		}
+		return (route == null) ? ("no " + what + " it can reach") : ("cannot afford the gatekeepers (" + DecisionLog.num(route.fee()) + " adena to " + route.last().name() + ") and cannot walk there");
 	}
 
 	/** @return what a trainer visit would teach it now, on a copy of its skills, or null when skills are not tracked */
@@ -1746,6 +1869,10 @@ public final class ColdLife
 	 */
 	private static boolean visitTrainer(ColdBot bot, Town town, long now, Context context, List<DecisionLog.Event> events)
 	{
+		if (town == null)
+		{
+			return false;
+		}
 		final SkillPlanner.Lesson lesson = previewLesson(bot, trainingBudget(bot, bot.getAdena(), context), context);
 		if ((lesson == null) || !lesson.any())
 		{
@@ -1775,30 +1902,36 @@ public final class ColdLife
 			bot.setLeg(new TravelLeg(from, master, now, now + walk + context.travel().errandStopMs()));
 			return true;
 		}
-		final Town other = context.catalog().masterTown(script, town);
-		if ((other == null) || (other == town))
+		// The whole trip is worked out first: what every hop costs, whether the purse covers it, and if not whether it can run.
+		final ZoneCatalog.Route route = context.catalog().masterRoute(script, town);
+		final boolean free = freeTeleport(bot, context);
+		if ((route != null) && (route.first() != town) && (free || ((route.fee() + context.supply().reserveFloor()) <= bot.getAdena())))
 		{
-			events.add(new DecisionLog.Event("nomaster-" + script, "No " + what + " it can reach from " + town.name()));
-			return false;
+			final Town other = route.first();
+			final long listed = town.feeTo(other.name());
+			final long fee = free ? 0L : Math.max(0L, listed);
+			bot.setAdena(bot.getAdena() - fee);
+			bot.setTown(other.name());
+			bot.setActivity(TO_TOWN);
+			bot.setLeg(TravelLeg.stay(other.arrival(), now, context.travel().escapeCastMs()));
+			final String hops = (other == route.last()) ? "" : (" on its way to " + route.last().name());
+			events.add(new DecisionLog.Event(null, (fee > 0L) ? ("Paid the " + town.name() + " gatekeeper " + DecisionLog.num(fee) + " adena to go to the " + what + " in " + other.name() + hops) : ("Took the " + town.name() + " gatekeeper (free) to go to the " + what + " in " + other.name() + hops)));
+			return true;
 		}
-		final long listed = town.feeTo(other.name());
-		if (listed < 0L)
+		final Town walkTo = mayRun(what) ? context.catalog().walkableMasterTown(script, town) : null;
+		if ((walkTo != null) && (walkTo != town))
 		{
-			events.add(new DecisionLog.Event("nomaster-" + script, "No " + what + " it can reach from " + town.name()));
-			return false;
+			// Too poor for the way (or no gatekeeper goes there): it runs, as a player with no money would.
+			final Point from = point(bot);
+			final TravelLeg walk = TravelLeg.walk(from, shopsOf(walkTo), now, context.travel().moveSpeed());
+			bot.setTown(walkTo.name());
+			bot.setActivity(WALKING_TO_TOWN);
+			bot.setLeg(walk);
+			events.add(new DecisionLog.Event(null, ((route == null) ? ("No gatekeeper reaches a " + what) : ("Cannot afford the gatekeepers (" + DecisionLog.num(route.fee()) + " adena)")) + ", so runs to the " + what + " in " + walkTo.name() + " (about " + minutes(walk.durationMs()) + ")"));
+			return true;
 		}
-		final long fee = freeTeleport(bot, context) ? 0L : listed;
-		if ((fee > 0L) && ((fee + context.supply().reserveFloor()) > bot.getAdena()))
-		{
-			events.add(new DecisionLog.Event("masterfee-" + other.name(), "Cannot afford the gatekeeper to " + other.name() + " for its " + what + " yet"));
-			return false;
-		}
-		bot.setAdena(bot.getAdena() - fee);
-		bot.setTown(other.name());
-		bot.setActivity(TO_TOWN);
-		bot.setLeg(TravelLeg.stay(other.arrival(), now, context.travel().escapeCastMs()));
-		events.add(new DecisionLog.Event(null, (fee > 0L) ? ("Paid the " + town.name() + " gatekeeper " + DecisionLog.num(fee) + " adena to go to the " + what + " in " + other.name()) : ("Took the " + town.name() + " gatekeeper (free) to go to the " + what + " in " + other.name())));
-		return true;
+		events.add(new DecisionLog.Event((route == null) ? ("nomaster-" + script) : ("masterfee-" + route.last().name()), (route == null) ? ("No " + what + " it can reach from " + town.name()) : ("Cannot afford the gatekeepers to the " + what + " in " + route.last().name() + " yet")));
+		return false;
 	}
 
 	/** At the class master: takes the quest, or hands it in and changes class. */
@@ -1846,7 +1979,9 @@ public final class ColdLife
 		{
 			// Nothing better it can afford: go back to where it was, even if it no longer fits perfectly.
 			final ZoneChooser.Choice back = ZoneChooser.route(current, town, catalog, situation.freeTeleport());
-			if ((back != null) && (back.fee() <= bot.getAdena()) && !situation.cannotReturnFrom(current, catalog))
+			// Not to a zone it has outgrown: a fitting zone on foot comes first (below), and the old one is the last resort.
+			final boolean outgrown = bot.getLevel() > (current.maxLevel() + ZoneChooser.OUTLEVEL_SLACK);
+			if ((back != null) && !outgrown && (back.fee() <= bot.getAdena()) && !situation.cannotReturnFrom(current, catalog))
 			{
 				choice = back;
 			}
@@ -1858,6 +1993,15 @@ public final class ColdLife
 			// rather than wait in a town where it earns nothing.
 			choice = ZoneChooser.walkFallback(situation, catalog);
 			broke = choice != null;
+		}
+		if ((choice == null) && (current != null))
+		{
+			// Nothing on foot either: the zone it has outgrown beats waiting in town where it earns nothing.
+			final ZoneChooser.Choice back = ZoneChooser.route(current, town, catalog, situation.freeTeleport());
+			if ((back != null) && (back.fee() <= bot.getAdena()) && !situation.cannotReturnFrom(current, catalog))
+			{
+				choice = back;
+			}
 		}
 		if (choice == null)
 		{

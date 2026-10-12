@@ -167,6 +167,15 @@ public final class ColdSeedPlan
 	}
 
 	/**
+	 * @return aiTeras: a Dwarven Fighter who grows up to be a spoiler (Scavenger, Bounty Hunter, Fortune Seeker). Man or woman is
+	 *         a coin toss when the character is created
+	 */
+	public static SeedSpec teras()
+	{
+		return new SeedSpec("Dwarf", 53, FRIEND);
+	}
+
+	/**
 	 * @param name the name to give
 	 * @param random the source
 	 * @return a new bot of that name in a random starting class
