@@ -85,6 +85,8 @@ public class ColdBot
 	private volatile double _incomeRate; // adena an hour its hunting last earned, kills and loot together (0 = none yet); not saved
 	private volatile double _potionCap = -1.0; // potions an hour it can afford to drink (-1 = not worked out yet, use the flat habit); not saved
 	private volatile double _potionRate = -1.0; // potions an hour it last needed in its zone (-1 = none yet); not saved
+	private volatile double _potionUse = -1.0; // potions an hour it chose to drink after weighing them against resting (-1 = not worked out yet); not saved
+	private volatile long _potionPrice; // adena one unit of potion costs it now (0 = unknown); not saved
 	private volatile double _shotsPerKill; // zone model: shots a kill takes it with its real skills and shot kind (0 = none yet); not saved
 	private volatile double _kills;
 	private volatile long _adenaEarned;
@@ -148,6 +150,28 @@ public class ColdBot
 	public void setPotionCap(double perHour)
 	{
 		_potionCap = (perHour < 0.0) ? -1.0 : perHour;
+	}
+
+	/** @return potions an hour the bot chose to drink after weighing them against resting, or -1 before that has been worked out */
+	public double getPotionUse()
+	{
+		return _potionUse;
+	}
+
+	public void setPotionUse(double perHour)
+	{
+		_potionUse = (perHour < 0.0) ? -1.0 : perHour;
+	}
+
+	/** @return adena one unit of potion costs the bot, or 0 when not known */
+	public long getPotionPrice()
+	{
+		return _potionPrice;
+	}
+
+	public void setPotionPrice(long price)
+	{
+		_potionPrice = Math.max(0L, price);
 	}
 
 	/** @return potions an hour the bot last needed in its zone, or -1 before it has one */

@@ -690,8 +690,12 @@ public final class ColdLife
 		{
 			perHour = 0.0; // in a party its healer keeps it up: it drinks none
 		}
+		else if (bot.getPotionUse() >= 0.0)
+		{
+			perHour = bot.getPotionUse(); // weighed against resting by the hunting span
+		}
 		final ZoneCombat model = context.combat();
-		if ((model != null) && model.knows(bot.getZone()) && (bot.getPotions() > 0))
+		if ((model != null) && model.knows(bot.getZone()) && (bot.getPotions() > 0) && (bot.getPartyDeathsPerHour() < 0.0) && (bot.getPotionUse() < 0.0))
 		{
 			perHour = model.potionsPerHour(bot.getZone(), bot.getClassId(), bot.getLevel(), statsOf(bot, context.gear(), model), 1.0, perHour); // only what its hunting gives a use for
 		}
@@ -2833,6 +2837,31 @@ public final class ColdLife
 		return Math.min(LivingSupplies.potionThroughput(bot.getLevel()), (bot.getIncomeRate() * POTION_SPEND_SHARE) / price);
 	}
 
+	/** What the experience a kill gives is worth next to its adena, when a bot weighs potions against resting (1 = as much). */
+	public static final double POTION_EXP_WEIGHT = 1.0;
+
+	/**
+	 * How many potions an hour this bot drinks in a zone, weighed against resting: what its fights cost it, cut to what it can afford, then
+	 * the amount whose extra kills are worth more than the potions cost ({@link PotionPlanner}). With no income figure yet, all it needs.
+	 * @param ceiling the most it can afford an hour
+	 * @param skills the share of its skills learned
+	 * @param blessed whether a mage fires blessed spiritshots
+	 */
+	public static double weighedPotions(ZoneCombat combat, ColdBot bot, String zone, int level, ZoneCombat.Stats stats, double skills, boolean blessed, double ceiling)
+	{
+		if (ceiling <= 0.0)
+		{
+			return 0.0;
+		}
+		final double need = combat.potionsPerHour(zone, bot.getClassId(), level, stats, skills, Math.min(ceiling, LivingSupplies.potionThroughput(level)));
+		if ((need <= 0.0) || (bot.getIncomeRate() <= 0.0) || (bot.getKillRate() <= 0.0))
+		{
+			return need;
+		}
+		final double perKill = bot.getIncomeRate() / (bot.getKillRate() * 60.0);
+		return PotionPlanner.choose(p -> combat.killsPerMinute(zone, bot.getClassId(), level, stats, skills, 1.0, blessed, p), need, perKill * (1.0 + POTION_EXP_WEIGHT), bot.getPotionPrice());
+	}
+
 	/** @return the most potions an hour this bot drinks: what it can afford once it has earned, else the flat habit for its class */
 	public static double potionCeiling(ColdBot bot, double flatHabit)
 	{
@@ -2865,7 +2894,7 @@ public final class ColdLife
 			{
 				return Double.NaN;
 			}
-			final double perHour = (bot.getPotions() > 0) ? combat.potionsPerHour(zone.name(), bot.getClassId(), level, stats, 1.0, habit) : 0.0;
+			final double perHour = (bot.getPotions() > 0) ? weighedPotions(combat, bot, zone.name(), level, stats, 1.0, false, habit) : 0.0;
 			final double kills = Math.max(0.3, Math.min(combat.killsPerMinute(zone.name(), bot.getClassId(), level, stats, 1.0, 1.0, false, perHour), combat.respawnCap(zone.name(), (occupancy == null ? 0 : occupancy.getOrDefault(zone.name(), 0)) + 1, ZONE_SHARE)));
 			final double rate = combat.deathsPerHour(zone.name(), bot.getClassId(), level, stats);
 			final double deaths = (rate >= 0.0) ? ColdRisk.fromRate(rate, bot.getPotions()).deathsPerHour() : 0.0;

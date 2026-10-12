@@ -35,6 +35,7 @@ import org.l2jmobius.gameserver.livingpop.ColdSeedPlan;
 import org.l2jmobius.gameserver.livingpop.DecisionLog;
 import org.l2jmobius.gameserver.livingpop.DropYield;
 import org.l2jmobius.gameserver.livingpop.MerchantPlanner;
+import org.l2jmobius.gameserver.livingpop.PotionPlanner;
 import org.l2jmobius.gameserver.livingpop.RaidLoot;
 import org.l2jmobius.gameserver.livingpop.RaidPlanner;
 import org.l2jmobius.gameserver.livingpop.GearCrafting;
@@ -2540,6 +2541,14 @@ public class LivingTravelTest
 		// Potions: no stock means none for anyone, and light classes drink in step with what they carry.
 		check("no potion stock gives light classes none either", (LivingSupplies.potionStockFor(10, 0) == 0) && (LivingSupplies.potionStockFor(9, 1) == 1));
 		check("potion use follows the role", (LivingSupplies.potionUseFactor(4) == 1.5) && (LivingSupplies.potionUseFactor(0) == 1.0) && (LivingSupplies.potionUseFactor(10) == 0.5) && (LivingSupplies.potionUseFactor(9) == 0.5));
+
+		// Weighing potions against resting: a bot drinks where the kills it gains pay for the potions, and rests for the rest.
+		final java.util.function.DoubleUnaryOperator flatGain = p -> 2.0 + (6.0 * Math.min(1.0, p / 100.0));
+		final java.util.function.DoubleUnaryOperator fadingGain = p -> 2.0 + (6.0 * Math.sqrt(Math.min(1.0, p / 100.0)));
+		check("potions that pay for themselves are all drunk", PotionPlanner.choose(flatGain, 100.0, 10.0, 20.0) == 100.0);
+		check("potions that cost more than the kills they add are not: the bot rests", PotionPlanner.choose(flatGain, 100.0, 10.0, 100.0) == 0.0);
+		check("with fading returns it drinks some and rests for the rest", PotionPlanner.choose(fadingGain, 100.0, 10.0, 30.0) == 25.0);
+		check("with no value or price known it drinks what it needs, and nothing when it needs none", (PotionPlanner.choose(flatGain, 100.0, 0.0, 30.0) == 100.0) && (PotionPlanner.choose(flatGain, 100.0, 10.0, 0.0) == 100.0) && (PotionPlanner.choose(flatGain, 0.0, 10.0, 30.0) == 0.0));
 
 		// Which potion to drink: the cheapest per HP that keeps up with the need (prices as in the item data: 90 / 330 / 900).
 		final java.util.function.IntToLongFunction shopPrice = id -> (id == 1060) ? 90L : (id == 1061) ? 330L : (id == 1539) ? 900L : 0L;
