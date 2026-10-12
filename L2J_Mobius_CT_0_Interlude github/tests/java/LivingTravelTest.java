@@ -30,8 +30,12 @@ import org.l2jmobius.gameserver.livingpop.ClassPath;
 import org.l2jmobius.gameserver.livingpop.ColdBot;
 import org.l2jmobius.gameserver.livingpop.ColdLife;
 import org.l2jmobius.gameserver.livingpop.ColdRisk;
+import org.l2jmobius.gameserver.livingpop.ColdSeedPlan;
 import org.l2jmobius.gameserver.livingpop.DecisionLog;
 import org.l2jmobius.gameserver.livingpop.DropYield;
+import org.l2jmobius.gameserver.livingpop.MerchantPlanner;
+import org.l2jmobius.gameserver.livingpop.ShotCrafting;
+import org.l2jmobius.gameserver.livingpop.ShotDemand;
 import org.l2jmobius.gameserver.livingpop.TownStock;
 import org.l2jmobius.gameserver.livingpop.GoalPlanner;
 import org.l2jmobius.gameserver.livingpop.LivingChat;
@@ -84,6 +88,8 @@ public class LivingTravelTest
 		testStarterZone();
 		testDropYield();
 		testTownStock();
+		testShotDemand();
+		testMerchant();
 		testLootSale();
 		testColdRisk();
 		testColdDeathAndRest();
@@ -191,6 +197,12 @@ public class LivingTravelTest
 		check("then as many potions as fit", tight.potions() == 2L);
 		check("never spends the reserve", (3500L - tight.cost()) >= 2500L);
 
+		// One Scroll of Escape is always bought, from the reserve if it has to be: 450 adena at level 10 is far under the 2500 reserve.
+		final SupplyPlanner.Purchase poorScroll = SupplyPlanner.shop(10, 450L, 0L, 0L, 0L, 1, true, prices(), params);
+		check("a bot under its reserve still buys its first scroll", (poorScroll.escapes() == 1L) && (poorScroll.potions() == 0L) && (poorScroll.soulshots() == 0L) && (poorScroll.cost() == 400L));
+		check("but only the first one from the reserve", SupplyPlanner.shop(10, 900L, 1L, 0L, 0L, 1, true, prices(), params).escapes() == 0L);
+		check("and not what it cannot pay for", SupplyPlanner.shop(10, 300L, 0L, 0L, 0L, 1, true, prices(), params).escapes() == 0L);
+
 		final SupplyPlanner.Purchase rich = SupplyPlanner.shop(20, 500_000L, 2L, 10L, 0L, 1, true, prices(), params);
 		check("an unlocked tier is bought when affordable", rich.upgraded());
 		check("soulshots are topped up to the stock", rich.soulshots() == 2160L);
@@ -292,6 +304,17 @@ public class LivingTravelTest
 		final ZoneChooser.Choice spill = ZoneChooser.choose(new ZoneChooser.Situation(21, "Elf", null, alpha, 100_000L, allFull, 8), catalog, null);
 		check("when every zone that fits is full it goes to the least crowded one", (spill != null) && "Beyond".equals(spill.zone().name()));
 		check("but still not to one it cannot afford", ZoneChooser.choose(new ZoneChooser.Situation(21, "Elf", null, alpha, 100L, allFull, 8), catalog, null) == null);
+
+		// Gatekeepers teleport free up to the server's MaxFreeTeleportLevel: a bot at or below it pays nothing, even with no adena.
+		final ZoneChooser.Choice freeFar = ZoneChooser.route(catalog.zone("Far Hills"), alpha, catalog, true);
+		check("a free teleport costs nothing but is still a gatekeeper way", (freeFar.way() == ZoneChooser.Way.GATEKEEPER) && (freeFar.fee() == 0L));
+		final ZoneChooser.Choice freeHop = ZoneChooser.route(catalog.zone("Beyond"), alpha, catalog, true);
+		check("a free hop costs nothing", (freeHop.way() == ZoneChooser.Way.HOP) && "Beta".equals(freeHop.viaTown()) && (freeHop.fee() == 0L));
+		check("not free keeps the fee", ZoneChooser.route(catalog.zone("Far Hills"), alpha, catalog, false).fee() == 2000L);
+		check("a walk stays a walk", ZoneChooser.route(catalog.zone("Near Woods"), alpha, catalog, true).way() == ZoneChooser.Way.WALK);
+		final ZoneChooser.Choice broke = ZoneChooser.choose(new ZoneChooser.Situation(25, "Elf", catalog.zone("Near Woods"), alpha, 0L, null, 0, null, true), catalog, null);
+		check("a free bot with no adena still travels", (broke != null) && (broke.fee() == 0L) && "Beyond".equals(broke.zone().name()));
+		check("a paying bot with no adena does not", ZoneChooser.choose(new ZoneChooser.Situation(25, "Elf", catalog.zone("Near Woods"), alpha, 0L, null, 0, null, false), catalog, null) == null);
 	}
 
 	private static void testTravelLeg()
@@ -391,6 +414,29 @@ public class LivingTravelTest
 		check("too poor for a gatekeeper it walks to the nearest fitting zone", ColdLife.TO_ZONE.equals(broke.getActivity()) && "Beyond".equals(broke.getZone()) && (broke.getAdena() == 600L) && (broke.getLeg().to().x() == 121000));
 		check("the walk says why", events.stream().anyMatch(e -> e.text().contains("on foot, as it cannot afford a gatekeeper")));
 
+		// The same bot at or below the server's free-teleport level pays no gatekeeper fee, so 600 adena is enough (and stays in its purse).
+		final ColdLife.Params freeTravel = new ColdLife.Params(100.0, 20_000L, 10_000L, 0, 60_000L, 60_000L, 4.0, 8, 300_000L, 2500.0, ColdLife.Params.DEFAULT_SPIRITSHOTS_PER_KILL, 40);
+		final ColdLife.Context freeContext = new ColdLife.Context(catalog(), supply(), freeTravel, (level, tier) -> prices(), new HashMap<>(), new Random(7));
+		final ColdBot free = bot(21, "Far Hills", 600L, 10L, 2L, 0);
+		free.setActivity(ColdLife.IN_TOWN);
+		free.setTown("Alpha");
+		free.setLevel(30);
+		free.setGearTier(2);
+		free.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		events.clear();
+		ColdLife.advance(free, 1L, 1L, freeContext, events);
+		check("a free-teleport bot takes the gatekeeper for nothing", ColdLife.TO_ZONE.equals(free.getActivity()) && "Beyond".equals(free.getZone()) && (free.getAdena() == 600L) && events.stream().noneMatch(e -> e.text().contains("on foot, as it cannot afford a gatekeeper")));
+		final ColdBot over = bot(21, "Far Hills", 600L, 10L, 2L, 0);
+		over.setActivity(ColdLife.IN_TOWN);
+		over.setTown("Alpha");
+		over.setLevel(30);
+		over.setGearTier(2);
+		over.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		final ColdLife.Params lowLimit = new ColdLife.Params(100.0, 20_000L, 10_000L, 0, 60_000L, 60_000L, 4.0, 8, 300_000L, 2500.0, ColdLife.Params.DEFAULT_SPIRITSHOTS_PER_KILL, 29);
+		events.clear();
+		ColdLife.advance(over, 1L, 1L, new ColdLife.Context(catalog(), supply(), lowLimit, (level, tier) -> prices(), new HashMap<>(), new Random(7)), events);
+		check("one level above the free limit it still pays (here it cannot, so it walks)", events.stream().anyMatch(e -> e.text().contains("on foot, as it cannot afford a gatekeeper")));
+
 		// No zone fits its level at all: it hunts the highest one it has outgrown rather than wait in town (FPC-297).
 		final ColdBot stuck = bot(21, "Far Hills", 600L, 10L, 2L, 0);
 		stuck.setActivity(ColdLife.IN_TOWN);
@@ -456,6 +502,321 @@ public class LivingTravelTest
 	private static boolean near(double value, double expected)
 	{
 		return Math.abs(value - expected) < 1e-6;
+	}
+
+	private static final long HOUR = 3_600_000L;
+
+	private static final String MERCHANT_XML = "<zones>" //
+		+ "<town name=\"Giran\" x=\"0\" y=\"0\" z=\"0\"><gatekeeper npcId=\"1\" x=\"100\" y=\"0\" z=\"0\"/><grocer npcId=\"2\" x=\"0\" y=\"100\" z=\"0\"/><route town=\"Gludio\" fee=\"1000\"/></town>" //
+		+ "<town name=\"Gludio\" x=\"100000\" y=\"0\" z=\"0\"><gatekeeper npcId=\"3\" x=\"100100\" y=\"0\" z=\"0\"/><grocer npcId=\"4\" x=\"100000\" y=\"100\" z=\"0\"/><route town=\"Giran\" fee=\"1000\"/></town>" //
+		+ "<zone name=\"Hunt\" minLevel=\"15\" maxLevel=\"50\"><teleport town=\"Giran\" x=\"5000\" y=\"0\" z=\"0\" fee=\"500\"/><teleport town=\"Gludio\" x=\"105000\" y=\"0\" z=\"0\" fee=\"500\"/><spot x=\"5200\" y=\"0\" z=\"0\"/></zone>" //
+		+ "<zone name=\"Devil's Isle\" minLevel=\"43\" maxLevel=\"48\"><teleport town=\"Giran\" x=\"43408\" y=\"206881\" z=\"-3752\" fee=\"5700\"/><spot x=\"44926\" y=\"206189\" z=\"-3711\"/></zone>" //
+		+ "</zones>";
+
+	private static void testMerchant() throws Exception
+	{
+		final ShotCrafting.Prices prices = ShotCrafting.Prices.standard();
+		final ShotCrafting.Recipe ssD = ShotCrafting.byShot(1463);
+		final ShotCrafting.Recipe ssC = ShotCrafting.byShot(1464);
+		final ShotCrafting.Recipe bspsD = ShotCrafting.byShot(3948);
+		final ShotCrafting.Recipe bspsC = ShotCrafting.byShot(3949);
+		check("a craft costs its ore plus its crystals", (ShotCrafting.craftCost(ssD, prices) == 1421L) && (ShotCrafting.craftCost(ssC, prices) == 6924L) && (ShotCrafting.craftCost(bspsD, prices) == 4712L) && (ShotCrafting.craftCost(bspsC, prices) == 18798L));
+		check("a shot costs 9.1, 14.5, 47.1 and 94.0", Math.abs(ShotCrafting.unitCost(ssD, prices) - 9.109) < 0.01 && Math.abs(ShotCrafting.unitCost(ssC, prices) - 14.546) < 0.01 && Math.abs(ShotCrafting.unitCost(bspsD, prices) - 47.12) < 0.01 && Math.abs(ShotCrafting.unitCost(bspsC, prices) - 93.99) < 0.01);
+		check("it never sells below cost plus 1 adena", (ShotCrafting.floorPrice(ssD, prices) == 11L) && (ShotCrafting.floorPrice(ssC, prices) == 16L) && (ShotCrafting.floorPrice(bspsD, prices) == 49L) && (ShotCrafting.floorPrice(bspsC, prices) == 95L));
+		check("D shots sell in Gludio, C shots in Giran", "Gludio".equals(ssD.saleTown()) && "Gludio".equals(bspsD.saleTown()) && "Giran".equals(ssC.saleTown()) && "Giran".equals(bspsC.saleTown()));
+
+		final int all = ShotCrafting.bit(ssD) | ShotCrafting.bit(ssC) | ShotCrafting.bit(bspsD) | ShotCrafting.bit(bspsC);
+		final Map<Integer, Double> wanted = Map.of(1463, 1000.0, 1464, 500.0, 3948, 100.0, 3949, 50.0);
+		final MerchantPlanner.Plan plan = MerchantPlanner.decide(all, 45, wanted, Map.of(), 2.0, 100L, 10_000_000L, prices);
+		check("D demand is covered before C", plan.recipe() == ssD);
+		check("a batch covers the hours of demand it keeps", (plan.crafts() == 13L) && (plan.shots() == 2028L) && (plan.cost() == 13L * 1421L));
+		check("shots already on sale count against the gap", MerchantPlanner.decide(ssD == null ? 0 : ShotCrafting.bit(ssD), 45, wanted, Map.of(1463, 1900L), 2.0, 100L, 10_000_000L, prices).crafts() == 1L);
+		check("with D covered it turns to C", MerchantPlanner.decide(all, 45, wanted, Map.of(1463, 5000L, 3948, 5000L), 2.0, 100L, 10_000_000L, prices).recipe() == ssC);
+		check("and nothing when all is covered", MerchantPlanner.decide(all, 45, wanted, Map.of(1463, 5000L, 3948, 5000L, 1464, 5000L, 3949, 5000L), 2.0, 100L, 10_000_000L, prices) == null);
+		check("below level 40 it makes no C shots", MerchantPlanner.decide(ShotCrafting.bit(ssC), 39, wanted, Map.of(), 2.0, 100L, 10_000_000L, prices) == null);
+		check("it crafts what its budget pays for", MerchantPlanner.decide(all, 45, wanted, Map.of(), 2.0, 100L, 3000L, prices).crafts() == 2L);
+		check("a trip makes at most its crafts cap", MerchantPlanner.decide(all, 45, Map.of(1463, 1_000_000.0), Map.of(), 2.0, 100L, 100_000_000L, prices).crafts() == 100L);
+		check("it learns the recipe hunters want most that its level allows", MerchantPlanner.recipeToLearn(0, 25, wanted) == ssD);
+		check("a recipe it knows is not learned again", MerchantPlanner.recipeToLearn(ShotCrafting.bit(ssD), 25, wanted) == bspsD);
+		check("C recipes wait for level 40", MerchantPlanner.recipeToLearn(ShotCrafting.bit(ssD) | ShotCrafting.bit(bspsD), 39, wanted) == null);
+
+		check("an empty shop asks the full markup over the floor", MerchantPlanner.price(11L, 0L, 2000.0, 0.5) == 17L);
+		check("the price falls as the shop fills", MerchantPlanner.price(11L, 1000L, 2000.0, 0.5) == 14L);
+		check("a shop with enough for the demand sells at the floor", (MerchantPlanner.price(11L, 2000L, 2000.0, 0.5) == 11L) && (MerchantPlanner.price(11L, 9000L, 2000.0, 0.5) == 11L));
+		check("with no demand it is the floor too", MerchantPlanner.price(11L, 0L, 0.0, 0.5) == 11L);
+
+		// The trip: buys its materials in Giran, sits on the isle, reads a scroll, sells in Gludio.
+		final ZoneCatalog catalog = ZoneCatalog.parse(MERCHANT_XML);
+		final List<String> listed = new ArrayList<>();
+		final Set<Integer> bought = new HashSet<>();
+		final Map<String, Long> shotStock = new HashMap<>();
+		final List<String> sold = new ArrayList<>();
+		final ColdLife.Workshop workshop = new ColdLife.Workshop()
+		{
+			@Override
+			public ShotCrafting.Prices prices()
+			{
+				return ShotCrafting.Prices.standard();
+			}
+
+			@Override
+			public Map<Integer, Double> wanted()
+			{
+				return Map.of(1463, 1000.0);
+			}
+
+			@Override
+			public long onSale(String town, int shotItemId)
+			{
+				return shotStock.getOrDefault(town + ":" + shotItemId, 0L);
+			}
+
+			@Override
+			public int shotFor(ColdBot bot)
+			{
+				return (bot.getLevel() >= 50) ? 1464 : 1463;
+			}
+
+			@Override
+			public long buyBack(int shotItemId, long count)
+			{
+				if ((shotItemId != 1463) && (shotItemId != 1464))
+				{
+					return -1L;
+				}
+				shotStock.merge("Gludio:" + shotItemId, count, Long::sum);
+				return count * 14L;
+			}
+
+			@Override
+			public long shotPrice(String town, int shotItemId)
+			{
+				return 14L;
+			}
+
+			@Override
+			public boolean buyShots(String town, int shotItemId, long count, long unitPrice)
+			{
+				final long held = shotStock.getOrDefault(town + ":" + shotItemId, 0L);
+				if (held < count)
+				{
+					return false;
+				}
+				shotStock.put(town + ":" + shotItemId, held - count);
+				sold.add(town + ":" + shotItemId + ":" + count + ":" + unitPrice);
+				return true;
+			}
+
+			@Override
+			public String recipeTown(int recipeItemId, String preferred)
+			{
+				return (recipeItemId == 1804) && !bought.contains(1804) ? "Giran" : null;
+			}
+
+			@Override
+			public long recipePrice(int recipeItemId)
+			{
+				return 5000L;
+			}
+
+			@Override
+			public boolean buyRecipe(String town, int recipeItemId, long price)
+			{
+				return bought.add(recipeItemId);
+			}
+
+			@Override
+			public void list(String town, long owner, int shotItemId, long count)
+			{
+				listed.add(town + ":" + owner + ":" + shotItemId + ":" + count);
+			}
+
+			@Override
+			public long craftMs()
+			{
+				return 30 * 60_000L;
+			}
+
+			@Override
+			public double hoursOfStock()
+			{
+				return 2.0;
+			}
+
+			@Override
+			public long maxCrafts()
+			{
+				return 100L;
+			}
+		};
+		final ColdLife.Params travel = new ColdLife.Params(100.0, 20_000L, 10_000L, 0, 60_000L, 60_000L, 4.0, 8, 300_000L, 2500.0, 6.0, 40);
+		final ColdLife.Context context = new ColdLife.Context(catalog, supply(), travel, (level, tier) -> prices(), new HashMap<>(), new Random(7), null, level -> 0L, null, null, null, null, workshop);
+		final ColdBot merchant = bot(25, "Hunt", 100_000L, 10L, 2L, 0);
+		merchant.setClassId(56);
+		merchant.setName("Sateya");
+		merchant.setTown("Giran");
+		merchant.setActivity(ColdLife.IN_TOWN);
+		merchant.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		final List<DecisionLog.Event> log = new ArrayList<>();
+		long now = runUntil(merchant, 1L, context, log, b -> ColdLife.CRAFTING.equals(b.getActivity()));
+		check("Sateya changes class to Artisan, whatever its id", (ClassPath.next(53, 1L, "Sateya") == 56) && (ClassPath.next(53, 1L, "Other") != -1));
+		check("it learned the recipe from the town's stock", (merchant.getRecipes() & ShotCrafting.bit(ssD)) != 0);
+		check("it carries the shots it will craft to Gludio", (merchant.getCarryItem() == 1463) && (merchant.getCarryCount() == 2028L) && "Gludio".equals(merchant.getCarryTown()));
+		check("it sits on Devil's Isle for the half hour", ColdLife.CRAFTING.equals(merchant.getActivity()) && (merchant.getLeg().durationMs() == 30 * 60_000L) && (merchant.getX() == 43408));
+		check("the gatekeeper to the isle is free at its level", merchant.getAdena() <= (100_000L - 5000L - 18_473L));
+		final long escapes = merchant.getEscapes();
+		now = runUntil(merchant, now, context, log, b -> ColdLife.DELIVERING.equals(b.getActivity()));
+		check("it read a Scroll of Escape to leave", merchant.getEscapes() == (escapes - 1L));
+		check("it heads to Gludio to sell", "Gludio".equals(merchant.getTown()) && listed.isEmpty());
+		runUntil(merchant, now, context, log, b -> !ColdLife.DELIVERING.equals(b.getActivity()));
+		check("the shots go on sale in Gludio under its id", listed.equals(List.of("Gludio:1:1463:2028")) && (merchant.getCarryCount() == 0L));
+		check("then it goes back to hunting", ColdLife.TO_ZONE.equals(merchant.getActivity()));
+
+		final ColdBot warrior = bot(25, "Hunt", 100_000L, 10L, 2L, 0);
+		warrior.setClassId(56); // an Artisan too, but not the Merchant
+		warrior.setTown("Giran");
+		warrior.setActivity(ColdLife.IN_TOWN);
+		warrior.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		runUntil(warrior, 1L, context, new ArrayList<>(), b -> !ColdLife.IN_TOWN.equals(b.getActivity()));
+		check("an Artisan that is not Sateya does not craft", !ColdLife.CRAFTING.equals(warrior.getActivity()) && (warrior.getRecipes() == 0));
+
+		// Nobody else takes the Merchant's decisions: a bot named Sateya that is not yet an Artisan does not craft either,
+		// and a bot with another name never changes into an Artisan by her rule.
+		final ColdBot girl = bot(12, "Hunt", 100_000L, 10L, 2L, 0);
+		girl.setName("Sateya");
+		girl.setClassId(53);
+		girl.setTown("Giran");
+		girl.setActivity(ColdLife.IN_TOWN);
+		girl.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		runUntil(girl, 1L, context, new ArrayList<>(), b -> !ColdLife.IN_TOWN.equals(b.getActivity()));
+		check("Sateya as a young Dwarven Fighter keeps hunting", !ColdLife.CRAFTING.equals(girl.getActivity()) && (girl.getRecipes() == 0));
+		int artisans = 0;
+		for (long id = 1; id <= 200; id++)
+		{
+			artisans += (ClassPath.next(53, id, "Dwarf" + id) == 56) ? 1 : 0;
+		}
+		check("other dwarves still pick their class by id, so not all become Artisans", (artisans > 0) && (artisans < 200));
+		check("the Merchant's class path is Artisan then Warsmith", (ClassPath.next(56, 1L, "Sateya") == 57));
+
+		// A hunter that fires D shots buys them only from the shop in Gludio: it goes there, and the shots leave the stock.
+		final ColdBot hunter = bot(25, "Hunt", 100_000L, 10L, 2L, 0);
+		hunter.setSoulshots(0L);
+		hunter.setTown("Giran");
+		hunter.setActivity(ColdLife.IN_TOWN);
+		hunter.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		final List<DecisionLog.Event> hunterLog = new ArrayList<>();
+		runUntil(hunter, 1L, context, hunterLog, b -> !ColdLife.IN_TOWN.equals(b.getActivity()));
+		check("with the shop empty it does not travel for shots and buys none from the grocer", ColdLife.TO_ZONE.equals(hunter.getActivity()) && (hunter.getSoulshots() == 0L) && sold.isEmpty());
+		shotStock.put("Gludio:1463", 5000L);
+		hunter.setTown("Giran");
+		hunter.setActivity(ColdLife.IN_TOWN);
+		hunter.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		runUntil(hunter, 1L, context, hunterLog, b -> "Gludio".equals(b.getTown()) && !ColdLife.TO_TOWN.equals(b.getActivity()) && !ColdLife.IN_TOWN.equals(b.getActivity()));
+		check("with shots in the Gludio shop it goes there and buys them", (hunter.getSoulshots() > 0L) && (sold.size() == 1) && sold.get(0).startsWith("Gludio:1463:") && sold.get(0).endsWith(":14"));
+		check("the shots left the stock", shotStock.get("Gludio:1463") == (5000L - hunter.getSoulshots()));
+		check("and they cost the shop price", hunter.getAdena() <= (100_000L - (hunter.getSoulshots() * 14L)));
+
+		// Old shots are sold to the vendor once the shots a bot fires change.
+		final ColdBot upgrader = bot(25, "Hunt", 10_000L, 10L, 2L, 0);
+		upgrader.setSoulshots(3000L);
+		upgrader.setShotItem(1835);
+		upgrader.setTown("Giran");
+		upgrader.setActivity(ColdLife.IN_TOWN);
+		upgrader.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		final List<DecisionLog.Event> upLog = new ArrayList<>();
+		runUntil(upgrader, 1L, context, upLog, b -> !ColdLife.IN_TOWN.equals(b.getActivity()));
+		check("its old shots are sold when the shots it fires change", upLog.stream().anyMatch(e -> e.text().startsWith("Sold its 3,000 old shots (item 1835)")) && (upgrader.getShotItem() == 1463));
+		final ColdBot steady = bot(25, "Hunt", 10_000L, 10L, 2L, 0);
+		steady.setSoulshots(3000L);
+		steady.setShotItem(1463);
+		steady.setTown("Giran");
+		steady.setActivity(ColdLife.IN_TOWN);
+		steady.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		final List<DecisionLog.Event> steadyLog = new ArrayList<>();
+		runUntil(steady, 1L, context, steadyLog, b -> !ColdLife.IN_TOWN.equals(b.getActivity()));
+		check("shots of the grade it fires are kept", steadyLog.stream().noneMatch(e -> e.text().startsWith("Sold its")) && (steady.getSoulshots() >= 3000L));
+
+		// Outgrown D shots go back onto the shop's shelf and the bot is paid the shop price.
+		shotStock.clear();
+		final ColdBot grown = bot(50, "Hunt", 10_000L, 10L, 2L, 0);
+		grown.setSoulshots(1000L);
+		grown.setShotItem(1463);
+		grown.setTown("Giran");
+		grown.setActivity(ColdLife.IN_TOWN);
+		grown.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		final List<DecisionLog.Event> grownLog = new ArrayList<>();
+		runUntil(grown, 1L, context, grownLog, b -> !ColdLife.IN_TOWN.equals(b.getActivity()));
+		check("outgrown D shots go back to the shop", grownLog.stream().anyMatch(e -> e.text().startsWith("Sold its 1,000 old shots (item 1463) back to the shop in Gludio for 14,000 adena")) && (shotStock.getOrDefault("Gludio:1463", 0L) == 1000L) && (grown.getShotItem() == 1464));
+		check("the bot is paid what the shop charges", grown.getAdena() >= 10_000L);
+
+		// Above the free-teleport level the Merchant still pays no fee between towns (alt and warehouse), only the isle.
+		shotStock.clear();
+		final ColdBot rich = bot(45, "Hunt", 100_000L, 10L, 2L, 0);
+		rich.setClassId(118);
+		rich.setName("Sateya");
+		rich.setRecipes(ShotCrafting.bit(ssD));
+		bought.clear();
+		rich.setTown("Gludio");
+		rich.setActivity(ColdLife.IN_TOWN);
+		rich.setLeg(TravelLeg.stay(new Point(100_000, 0, 0), 0L, 0L));
+		final List<DecisionLog.Event> richLog = new ArrayList<>();
+		runUntil(rich, 1L, context, richLog, b -> ColdLife.CRAFTING.equals(b.getActivity()));
+		check("it went to Giran for the materials at no gatekeeper cost", richLog.stream().anyMatch(e -> e.text().contains("Goes to Giran") && e.text().contains("gatekeeper 0 adena")));
+		check("only the gatekeeper to the isle was paid", ColdLife.CRAFTING.equals(rich.getActivity()) && (rich.getAdena() >= (100_000L - 18_473L - 5_700L - 2_000L)));
+
+		check("Sateriok goes Fighter, Warrior, Gladiator, Duelist", (ClassPath.next(0, 7L, "aiSateriok") == 1) && (ClassPath.next(1, 7L, "aiSateriok") == 2) && (ClassPath.next(2, 7L, "aiSateriok") == 88));
+		check("SonOfZion's Mystic goes Cleric, Bishop", (ClassPath.next(10, 5L, "aiSonOfZion") == 15) && (ClassPath.next(15, 5L, "aiSonOfZion") == 16));
+		check("and his Orc Fighter goes Raider, Destroyer, Titan's line", (ClassPath.next(44, 5L, "aiSonOfZion") == 45) && (ClassPath.next(45, 5L, "aiSonOfZion") == 46));
+		int mystics = 0;
+		final Random coin = new Random(11);
+		for (int draw = 0; draw < 200; draw++)
+		{
+			mystics += (ColdSeedPlan.zion(coin).classId() == 10) ? 1 : 0;
+		}
+		check("SonOfZion is a Mystic about half the time and an Orc Fighter the rest", (mystics > 60) && (mystics < 140));
+		check("the named bots earn 30% more while two or more levels below the top", (ColdSeedPlan.expBonus("aiTeras", 30, 40) == 1.3) && (ColdSeedPlan.expBonus("aiSateriok", 37, 40) == 1.3) && (ColdSeedPlan.expBonus("aiSonOfZion", 1, 80) == 1.3));
+		check("within a level of the top they earn the plain rate", (ColdSeedPlan.expBonus("aiTeras", 39, 40) == 1.0) && (ColdSeedPlan.expBonus("aiTeras", 40, 40) == 1.0) && (ColdSeedPlan.expBonus("aiSateriok", 41, 40) == 1.0));
+		check("nobody else gets it", (ColdSeedPlan.expBonus("Sateya", 10, 60) == 1.0) && (ColdSeedPlan.expBonus("Tester", 10, 60) == 1.0));
+		check("the named bots wear their titles", "Dev God".equals(ColdSeedPlan.titleOf("aiSateriok")) && "Bot Torturer".equals(ColdSeedPlan.titleOf("aiSonOfZion")) && "Administrator".equals(ColdSeedPlan.titleOf("aiTeras")) && "The Merchant".equals(ColdSeedPlan.titleOf("Sateya")) && (ColdSeedPlan.titleOf("Tester") == null));
+		check("the named bots carry their titles", "The Admin".equals(ColdSeedPlan.title("aiTeras")) && "Bot Torturer".equals(ColdSeedPlan.title("aiSonOfZion")) && "Dev God".equals(ColdSeedPlan.title("aiSateriok")) && "The Merchant".equals(ColdSeedPlan.title("Sateya")) && (ColdSeedPlan.title("Other") == null));
+		final ColdSeedPlan.SeedSpec teras = ColdSeedPlan.randomNamed("aiTeras", new Random(3));
+		check("Teras is born in a starting class of a race", "aiTeras".equals(teras.name()) && (teras.race() != null) && (ClassPath.next(teras.classId(), 1L) != -1));
+
+		final ColdBot saved = new ColdBot();
+		saved.setStatsJson(merchant.getStatsJson());
+		merchant.setCarry(1463, 500L, "Gludio");
+		merchant.setRecipes(5);
+		saved.setStatsJson(merchant.getStatsJson());
+		check("its recipes and the shots it carries are saved", (saved.getRecipes() == 5) && (saved.getCarryItem() == 1463) && (saved.getCarryCount() == 500L) && "Gludio".equals(saved.getCarryTown()));
+	}
+
+	private static void testShotDemand()
+	{
+		final ShotDemand demand = new ShotDemand();
+		// Giran's hunters: 600 shots fired in the first hour, then 900 fired of 1500 wanted in the second.
+		demand.record("Giran", 1463, 600, 600, 0L);
+		demand.record("Giran", 1463, 900, 1500, HOUR + (HOUR / 2));
+		demand.record("Giran", 1464, 100, 100, HOUR + 10L);
+		demand.record("Aden", 1463, 50, 50, HOUR + 10L);
+		final ShotDemand.Rate full = demand.perHour("Giran", 1463, 2, 2 * HOUR - 1L);
+		check("shots fired per hour over a window", (Math.abs(full.fired() - 750.0) < 1e-3) && (Math.abs(full.wanted() - 1050.0) < 1e-3));
+		check("shots wanted but missed are the difference", Math.abs(full.missed() - 300.0) < 1e-3);
+		check("the most recent hour alone", Math.abs(demand.perHour("Giran", 1463, 1, 2 * HOUR - 1L).fired() - 900.0) < 1e-3);
+		check("a town and an item are kept apart", (Math.abs(demand.perHour("Aden", 1463, 2, 2 * HOUR - 1L).fired() - 25.0) < 1e-3) && (demand.perHour("Aden", 1464, 2, 2 * HOUR - 1L).wanted() == 0.0));
+		check("a town lists the shots its hunters use", (demand.town("Giran", 2, 2 * HOUR - 1L).keySet().equals(java.util.Set.of(1463, 1464))) && demand.towns().equals(List.of("Aden", "Giran")));
+		// A restart: saved after 2 hours, back 5 hours later; the downtime is cut out so the rate holds.
+		final ShotDemand restored = new ShotDemand();
+		final int read = restored.decode(demand.encode(2 * HOUR - 1L), 7 * HOUR - 1L);
+		check("a saved demand reads back", read == 4);
+		final ShotDemand.Rate again = restored.perHour("Giran", 1463, 2, 7 * HOUR - 1L);
+		check("downtime does not sag the rate", (Math.abs(again.fired() - 750.0) < 1e-3) && (Math.abs(again.wanted() - 1050.0) < 1e-3));
+		check("garbage decodes to nothing", (new ShotDemand().decode("junk", 0L) == 0) && (new ShotDemand().decode(null, 0L) == 0));
+		final ShotDemand young = new ShotDemand();
+		young.record("Dion", 1463, 300, 300, 0L);
+		check("a younger tracker averages over the time it has run", Math.abs(young.perHour("Dion", 1463, 24, HOUR / 2).fired() - 600.0) < 1e-9);
+		demand.record("Giran", 1463, 5, 3, 3 * HOUR);
+		check("fired never counts above wanted", demand.perHour("Giran", 1463, 1, 3 * HOUR).fired() <= demand.perHour("Giran", 1463, 1, 3 * HOUR).wanted());
+		check("no town means nothing is recorded", new ShotDemand().towns().isEmpty());
 	}
 
 	private static void testTownStock()
@@ -1351,6 +1712,16 @@ public class LivingTravelTest
 		check("never on foot to newbie grounds across the water", ZoneChooser.route(catalog.zone("Isle Newbies"), catalog.town("Main"), catalog).way() == ZoneChooser.Way.GATEKEEPER);
 		check("the newbie grounds trip pays the gatekeeper to the island's town", (ZoneChooser.route(catalog.zone("Isle Newbies"), catalog.town("Main"), catalog).fee() == 500L) && ZoneChooser.route(catalog.zone("Isle Newbies"), catalog.town("Main"), catalog).arrival().equals(new Point(0, 0, 0)));
 		check("newbie grounds on the same island are walked to", ZoneChooser.route(catalog.zone("Isle Newbies"), catalog.town("Isle"), catalog).way() == ZoneChooser.Way.WALK);
+
+		// A bot without a Scroll of Escape does not go where there is no way home but the scroll (an island without a town).
+		check("a zone on an island without a town needs a scroll to get home", ZoneChooser.needsEscape(catalog.zone("Rock"), catalog));
+		check("a mainland zone does not", !ZoneChooser.needsEscape(catalog.zone("Shore"), catalog));
+		check("nor do newbie grounds on an island with a town", !ZoneChooser.needsEscape(catalog.zone("Isle Newbies"), catalog));
+		final ZoneChooser.Choice withScroll = ZoneChooser.choose(new ZoneChooser.Situation(35, "Elf", null, catalog.town("Main"), 100_000L, null, 0, null, false, true), catalog, null);
+		check("with a scroll it goes to the island zone", (withScroll != null) && "Rock".equals(withScroll.zone().name()));
+		check("without one it stays away from it", ZoneChooser.choose(new ZoneChooser.Situation(35, "Elf", null, catalog.town("Main"), 100_000L, null, 0, null, false, false), catalog, null) == null);
+		check("and does not go back to it either", ZoneChooser.choose(new ZoneChooser.Situation(35, "Elf", catalog.zone("Rock"), catalog.town("Main"), 100_000L, null, 0, null, false, false), catalog, null) == null);
+		check("a mainland zone needs no scroll", ZoneChooser.choose(new ZoneChooser.Situation(20, "Elf", null, catalog.town("Main"), 100_000L, null, 0, null, false, false), catalog, null) != null);
 
 		// FPC-296: far newbie grounds on the same land go through the gatekeeper to their town, on foot only without one.
 		final ZoneCatalog land = ZoneCatalog.parse(STARTER_XML);

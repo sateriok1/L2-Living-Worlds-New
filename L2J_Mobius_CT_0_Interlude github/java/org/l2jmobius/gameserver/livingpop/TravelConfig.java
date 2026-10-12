@@ -63,8 +63,10 @@ package org.l2jmobius.gameserver.livingpop;
  *            buying whole gear tiers
  * @param gearTrade whether gear no shop in the bot's town sells can be bought as if from another player, at the item's
  *            reference price (a stand-in until bots trade with each other; see {@code GearCatalog.tradePrice})
+ * @param freeTeleportLevel the highest level the gatekeepers teleport for free (the server's MaxFreeTeleportLevel); bots at or
+ *            below it pay no gatekeeper fee. 0 or less makes every bot pay
  */
-public record TravelConfig(boolean enabled, String zonesFile, int potionStock, double potionRestockFraction, int soulshotStockMinutes, double soulshotRestockFraction, long soulshotMinPurchase, double spiritshotsPerKill, int escapeStock, long reserveFloor, long reservePerLevel, double reserveFraction, double moveSpeed, long escapeCastMs, long errandStopMs, int afkChancePercent, long afkMinMs, long afkMaxMs, double potionsPerHour, int zoneCapacity, long retryMs, double escapeMinDistance, boolean dropIncome, double deathsPerHour, long deathRecoverMs, long restEveryMs, long restMs, long avoidZoneMs, boolean classChanges, long[] classQuestMs, boolean skillTraining, boolean gearSlots, boolean gearTrade)
+public record TravelConfig(boolean enabled, String zonesFile, int potionStock, double potionRestockFraction, int soulshotStockMinutes, double soulshotRestockFraction, long soulshotMinPurchase, double spiritshotsPerKill, int escapeStock, long reserveFloor, long reservePerLevel, double reserveFraction, double moveSpeed, long escapeCastMs, long errandStopMs, int afkChancePercent, long afkMinMs, long afkMaxMs, double potionsPerHour, int zoneCapacity, long retryMs, double escapeMinDistance, boolean dropIncome, double deathsPerHour, long deathRecoverMs, long restEveryMs, long restMs, long avoidZoneMs, boolean classChanges, long[] classQuestMs, boolean skillTraining, boolean gearSlots, boolean gearTrade, int freeTeleportLevel)
 {
 	/** @return the shipped defaults */
 	public static TravelConfig defaults()
@@ -74,7 +76,7 @@ public record TravelConfig(boolean enabled, String zonesFile, int potionStock, d
 			3_600_000L,
 			10_800_000L,
 			14_400_000L
-		}, true, true, true);
+		}, true, true, true, 40);
 	}
 
 	/**
@@ -105,6 +107,6 @@ public record TravelConfig(boolean enabled, String zonesFile, int potionStock, d
 	/** @return the travel tuning */
 	public ColdLife.Params travelParams()
 	{
-		return new ColdLife.Params(moveSpeed, escapeCastMs, errandStopMs, afkChancePercent, afkMinMs, afkMaxMs, potionsPerHour, zoneCapacity, retryMs, escapeMinDistance, spiritshotsPerKill);
+		return new ColdLife.Params(moveSpeed, escapeCastMs, errandStopMs, afkChancePercent, afkMinMs, afkMaxMs, potionsPerHour, zoneCapacity, retryMs, escapeMinDistance, spiritshotsPerKill, freeTeleportLevel);
 	}
 }

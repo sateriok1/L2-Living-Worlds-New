@@ -87,8 +87,94 @@ public final class ColdSeedPlan
 
 	private static final int NAME_ATTEMPTS = 200;
 
+	/** The owner's name: a human Fighter who always becomes a Duelist, born with the first wave. */
+	public static final String OWNER = "aiSateriok";
+	/** A friend's name: a male bot, half the time a human Mystic who becomes a Bishop and half an Orc Fighter who becomes a Titan. */
+	public static final String ZION = "aiSonOfZion";
+	/** A friend's name: a bot of a random race and class, born with the first wave. */
+	public static final String FRIEND = "aiTeras";
+
+	/**
+	 * @param name a bot's name
+	 * @return the custom title that bot wears in the world, or null for none
+	 */
+	public static String titleOf(String name)
+	{
+		if (OWNER.equalsIgnoreCase(name))
+		{
+			return "Dev God";
+		}
+		if (ZION.equalsIgnoreCase(name))
+		{
+			return "Bot Torturer";
+		}
+		if (FRIEND.equalsIgnoreCase(name))
+		{
+			return "Administrator";
+		}
+		return ShotCrafting.MERCHANT.equalsIgnoreCase(name) ? ShotCrafting.MERCHANT_TITLE : null;
+	}
+
 	private ColdSeedPlan()
 	{
+	}
+
+	/**
+	 * @param name a bot's name
+	 * @return the custom title the named bots carry in the world, or null
+	 */
+	public static String title(String name)
+	{
+		if (ShotCrafting.MERCHANT.equalsIgnoreCase(name))
+		{
+			return ShotCrafting.MERCHANT_TITLE;
+		}
+		if (OWNER.equalsIgnoreCase(name))
+		{
+			return "Dev God";
+		}
+		if (ZION.equalsIgnoreCase(name))
+		{
+			return "Bot Torturer";
+		}
+		return FRIEND.equalsIgnoreCase(name) ? "The Admin" : null;
+	}
+
+	/** How much more experience the three named bots earn in the cold simulation (30%), until they are within a level of the top. */
+	public static final double NAMED_EXP_BONUS = 1.3;
+
+	/**
+	 * The experience multiplier of a cold bot: the three named bots (the owner, aiSonOfZion and aiTeras) earn 30% more
+	 * until they come within one level of the highest-level bot, so they stay competitive without being pushed to the top.
+	 * @param name the bot's name
+	 * @param level its level
+	 * @param topLevel the highest level of any bot
+	 * @return 1.3 or 1.0
+	 */
+	public static double expBonus(String name, int level, int topLevel)
+	{
+		final boolean named = OWNER.equalsIgnoreCase(name) || ZION.equalsIgnoreCase(name) || FRIEND.equalsIgnoreCase(name);
+		return (named && ((topLevel - level) > 1)) ? NAMED_EXP_BONUS : 1.0;
+	}
+
+	/**
+	 * @param random the source
+	 * @return aiSonOfZion, a human Mystic or an Orc Fighter by a coin toss
+	 */
+	public static SeedSpec zion(Random random)
+	{
+		return random.nextBoolean() ? new SeedSpec("Human", 10, ZION) : new SeedSpec("Orc", 44, ZION);
+	}
+
+	/**
+	 * @param name the name to give
+	 * @param random the source
+	 * @return a new bot of that name in a random starting class
+	 */
+	public static SeedSpec randomNamed(String name, Random random)
+	{
+		final Object[] pick = BASE_CLASSES[random.nextInt(BASE_CLASSES.length)];
+		return new SeedSpec((String) pick[0], (int) pick[1], name);
 	}
 
 	/**

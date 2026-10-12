@@ -41,6 +41,16 @@ public final class LivingSupplies
 		1467, // S
 	};
 
+	private static final int[] BLESSED_SPIRITSHOT_BY_GRADE =
+	{
+		3947, // no grade
+		3948, // D
+		3949, // C
+		3950, // B
+		3951, // A
+		3952, // S
+	};
+
 	private static final int[] SPIRITSHOT_BY_GRADE =
 	{
 		2509, // no grade
@@ -197,5 +207,21 @@ public final class LivingSupplies
 	public static int shotIdFor(int classId, int gearLevel)
 	{
 		return isMystic(classId) ? spiritshotIdFor(gearLevel) : soulshotIdFor(gearLevel);
+	}
+
+	/**
+	 * @param classId the bot's class id
+	 * @param weaponGrade the grade of the weapon it fires them with (0 no grade to 5 S)
+	 * @param blessed whether a mystic fires blessed spiritshots
+	 * @return the shot item id it uses: blessed or plain spiritshots for a mystic, soulshots for everyone else
+	 */
+	public static int shotIdForGrade(int classId, int weaponGrade, boolean blessed)
+	{
+		final int grade = Math.max(0, Math.min(SOULSHOT_BY_GRADE.length - 1, weaponGrade));
+		if (!isMystic(classId))
+		{
+			return SOULSHOT_BY_GRADE[grade];
+		}
+		return blessed ? BLESSED_SPIRITSHOT_BY_GRADE[grade] : SPIRITSHOT_BY_GRADE[grade];
 	}
 }

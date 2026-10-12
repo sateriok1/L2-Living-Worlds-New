@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
@@ -617,6 +618,70 @@ public class FakePlayerBehaviorManager implements IXmlReader
 		return false;
 	}
 
+	private final Set<Integer> _shopkeepers = ConcurrentHashMap.newKeySet(); // named vendors placed by a module; they only sit and sell
+
+	/**
+	 * Places a named vendor that sits in a SELL store and takes no part in the town crowd's behavior.
+	 * @param where where it sits
+	 * @param name its name
+	 * @param stock what it sells
+	 * @return the vendor, or {@code null} when it could not be placed
+	 */
+	public Npc placeShopkeeper(Location where, String name, List<FakePlayerStoreItem> stock)
+	{
+		if ((stock == null) || stock.isEmpty())
+		{
+			return null;
+		}
+		final int groundZ = GeoEngine.getInstance().getHeight(where.getX(), where.getY(), where.getZ());
+		final FakePlayerAppearance look = FakePlayerAppearanceFactory.generate(20, 40, Race.DWARF, true);
+		look.setName(name);
+		look.setTitle("Adena Whore");
+		look.setStoreItems(stock);
+		look.setStore(PrivateStoreType.SELL.getId(), FakePlayerStoreFactory.title("SELL", stock));
+		final Npc npc = placeBot(new Location(where.getX(), where.getY(), groundZ), Rnd.get(65536), look, null);
+		if (npc != null)
+		{
+			_shopkeepers.add(npc.getObjectId());
+		}
+		return npc;
+	}
+
+	/**
+	 * Gives a named vendor its current stock, opening its store when it had closed on selling out and closing it when the
+	 * stock is empty.
+	 * @param npc the vendor from {@link #placeShopkeeper}
+	 * @param stock what it sells now
+	 */
+	public void restockShopkeeper(Npc npc, List<FakePlayerStoreItem> stock)
+	{
+		final FakePlayerAppearance look = npc.getFakePlayerAppearance();
+		if (look == null)
+		{
+			return;
+		}
+		synchronized (look.storeLock())
+		{
+			look.setStoreItems(stock);
+			if (stock.isEmpty())
+			{
+				look.setStore(0, "");
+			}
+			else
+			{
+				look.setStore(PrivateStoreType.SELL.getId(), FakePlayerStoreFactory.title("SELL", stock));
+			}
+		}
+		refreshFakePlayerVisual(npc);
+	}
+
+	/** Removes a named vendor. */
+	public void removeShopkeeper(Npc npc)
+	{
+		_shopkeepers.remove(npc.getObjectId());
+		npc.deleteMe();
+	}
+
 	/** A random, geo-valid, ground-snapped spawn point inside a population's circle or drawn area. */
 	private Location randomSpawnPoint(Population population)
 	{
@@ -851,7 +916,7 @@ public class FakePlayerBehaviorManager implements IXmlReader
 				continue;
 			}
 			final Npc npc = object.asNpc();
-			if (!npc.isFakePlayer() || _bots.containsKey(npc.getObjectId()))
+			if (!npc.isFakePlayer() || _bots.containsKey(npc.getObjectId()) || _shopkeepers.contains(npc.getObjectId()))
 			{
 				continue;
 			}

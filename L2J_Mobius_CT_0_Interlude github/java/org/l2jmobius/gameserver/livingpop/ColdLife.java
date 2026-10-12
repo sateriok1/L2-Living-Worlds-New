@@ -56,6 +56,16 @@ public final class ColdLife
 	public static final String CLASS_MASTER = "class_master";
 	public static final String TO_TOWN = "to_town";
 	public static final String TRAINER = "trainer";
+	/** A Merchant sitting on Devil's Isle while its materials turn into shots. */
+	public static final String CRAFTING = "crafting";
+	/** A Merchant reading a Scroll of Escape to leave the isle. */
+	public static final String CRAFT_RETURN = "craft_return";
+	/** A Merchant paying the gatekeeper to the town it sells its shots in. */
+	public static final String DELIVERING = "delivering";
+	/** Where the materials are bought. */
+	public static final String MATERIALS_TOWN = "Giran";
+	/** The zone a Merchant crafts in. */
+	public static final String CRAFT_ZONE = "Devil's Isle";
 
 	/** Skill levels waiting at the trainer that make a trip of their own worthwhile. */
 	public static final int SKILL_TRIP_MIN = 3;
@@ -79,15 +89,21 @@ public final class ColdLife
 	 * @param retryMs how long a bot that could not find an affordable way on waits before trying again
 	 * @param escapeMinDistance a town closer than this is walked to even with a Scroll of Escape in the bag
 	 * @param spiritshotsPerKill spiritshots a mystic fires per kill (fighters use the soulshot rate of the supply tuning)
+	 * @param freeTeleportLevel the highest level the gatekeepers teleport for free; a bot at or below it pays no gatekeeper fee (0 or less: every bot pays)
 	 */
-	public record Params(double moveSpeed, long escapeCastMs, long errandStopMs, int afkChancePercent, long afkMinMs, long afkMaxMs, double potionsPerHour, int zoneCapacity, long retryMs, double escapeMinDistance, double spiritshotsPerKill)
+	public record Params(double moveSpeed, long escapeCastMs, long errandStopMs, int afkChancePercent, long afkMinMs, long afkMaxMs, double potionsPerHour, int zoneCapacity, long retryMs, double escapeMinDistance, double spiritshotsPerKill, int freeTeleportLevel)
 	{
 		/** The default spiritshot use: a caster fires one per spell, about two spells a kill. */
 		public static final double DEFAULT_SPIRITSHOTS_PER_KILL = 2.0;
 
 		public Params(double moveSpeed, long escapeCastMs, long errandStopMs, int afkChancePercent, long afkMinMs, long afkMaxMs, double potionsPerHour, int zoneCapacity, long retryMs, double escapeMinDistance)
 		{
-			this(moveSpeed, escapeCastMs, errandStopMs, afkChancePercent, afkMinMs, afkMaxMs, potionsPerHour, zoneCapacity, retryMs, escapeMinDistance, DEFAULT_SPIRITSHOTS_PER_KILL);
+			this(moveSpeed, escapeCastMs, errandStopMs, afkChancePercent, afkMinMs, afkMaxMs, potionsPerHour, zoneCapacity, retryMs, escapeMinDistance, DEFAULT_SPIRITSHOTS_PER_KILL, 0);
+		}
+
+		public Params(double moveSpeed, long escapeCastMs, long errandStopMs, int afkChancePercent, long afkMinMs, long afkMaxMs, double potionsPerHour, int zoneCapacity, long retryMs, double escapeMinDistance, double spiritshotsPerKill)
+		{
+			this(moveSpeed, escapeCastMs, errandStopMs, afkChancePercent, afkMinMs, afkMaxMs, potionsPerHour, zoneCapacity, retryMs, escapeMinDistance, spiritshotsPerKill, 0);
 		}
 	}
 
@@ -110,6 +126,12 @@ public final class ColdLife
 		default SupplyPlanner.Prices prices(int level, int gearTier, int classId)
 		{
 			return prices(level, gearTier);
+		}
+
+		/** @return what a vendor pays for one of an item (half its reference price), 0 when unknown */
+		default long vendorPrice(int itemId)
+		{
+			return 0L;
 		}
 	}
 
@@ -176,8 +198,13 @@ public final class ColdLife
 	 * @param gear gear kept per slot, or null for bots that buy whole gear tiers
 	 * @param combat the zone combat model for kill and death rates, or null for the flat rates
 	 */
-	public record Context(ZoneCatalog catalog, SupplyPlanner.Params supply, Params travel, PriceBook priceBook, Map<String, Integer> occupancy, Random random, ColdRisk.Params risk, IntToLongFunction expToNext, long[] classQuestMs, SkillBook skills, GearShop gear, ZoneCombat combat)
+	public record Context(ZoneCatalog catalog, SupplyPlanner.Params supply, Params travel, PriceBook priceBook, Map<String, Integer> occupancy, Random random, ColdRisk.Params risk, IntToLongFunction expToNext, long[] classQuestMs, SkillBook skills, GearShop gear, ZoneCombat combat, Workshop workshop)
 	{
+		public Context(ZoneCatalog catalog, SupplyPlanner.Params supply, Params travel, PriceBook priceBook, Map<String, Integer> occupancy, Random random, ColdRisk.Params risk, IntToLongFunction expToNext, long[] classQuestMs, SkillBook skills, GearShop gear, ZoneCombat combat)
+		{
+			this(catalog, supply, travel, priceBook, occupancy, random, risk, expToNext, classQuestMs, skills, gear, combat, null);
+		}
+
 		public Context(ZoneCatalog catalog, SupplyPlanner.Params supply, Params travel, PriceBook priceBook, Map<String, Integer> occupancy, Random random, ColdRisk.Params risk, IntToLongFunction expToNext, long[] classQuestMs, SkillBook skills, GearShop gear)
 		{
 			this(catalog, supply, travel, priceBook, occupancy, random, risk, expToNext, classQuestMs, skills, gear, null);
@@ -203,6 +230,62 @@ public final class ColdLife
 			this(catalog, supply, travel, priceBook, occupancy, random, null, level -> 0L);
 		}
 	}
+
+	/**
+	 * What a Merchant needs from the world around it: the recipes in the towns' stock, the shots the hunters want, its
+	 * shop. The crafting itself is bypassed: the materials it buys leave its inventory and the shots replace them.
+	 */
+	public interface Workshop
+	{
+		/** @return what the materials cost */
+		ShotCrafting.Prices prices();
+
+		/** @return shot item id to the shots hunters want an hour, in every town together */
+		Map<Integer, Double> wanted();
+
+		/** @return how many of a shot a town's shops hold now */
+		long onSale(String town, int shotItemId);
+
+		/** @return the town that holds this recipe in its stock (the preferred one first), or null */
+		String recipeTown(int recipeItemId, String preferred);
+
+		/** @return what a recipe costs (its reference price) */
+		long recipePrice(int recipeItemId);
+
+		/** Takes the recipe out of the town's stock and pays its owner. @return whether it was still there */
+		boolean buyRecipe(String town, int recipeItemId, long price);
+
+		/** Puts shots in a town's stock for the shops to sell, owned by the Merchant. */
+		void list(String town, long owner, int shotItemId, long count);
+
+		/** @return how long the Merchant sits on the isle */
+		long craftMs();
+
+		/** @return how many hours of demand a batch covers */
+		double hoursOfStock();
+
+		/** @return the most crafts one trip makes */
+		long maxCrafts();
+
+		/** @return the shot item this bot fires (by its class and weapon grade) */
+		int shotFor(ColdBot bot);
+
+		/** @return what a shot costs in the shops of a town now */
+		long shotPrice(String town, int shotItemId);
+
+		/**
+		 * Takes D or C shots a bot has outgrown back into the shop that sells them: the shots go onto the shop's shelf and the
+		 * Merchant pays for them at the price the shop sells at now.
+		 * @return the adena the bot is paid, or -1 when these are not the Merchant's shots
+		 */
+		long buyBack(int shotItemId, long count);
+
+		/** Takes shots out of a town's shops for a buyer and pays their owner what the buyer pays. @return whether that many were there */
+		boolean buyShots(String town, int shotItemId, long count, long unitPrice);
+	}
+
+	/** The price of a shot at the grocer when the shop sells it instead: too high to buy (a bot buys D and better shots only from the Merchant's shops). */
+	private static final long NO_GROCER_SHOTS = Long.MAX_VALUE / 4L;
 
 	/**
 	 * @param activity an activity label
@@ -341,6 +424,22 @@ public final class ColdLife
 				leaveTown(bot, now, context, events);
 				break;
 			}
+			case CRAFTING:
+			{
+				finishCrafting(bot, now, context, events);
+				break;
+			}
+			case CRAFT_RETURN:
+			{
+				arriveFromIsle(bot, now, context, events);
+				break;
+			}
+			case DELIVERING:
+			{
+				listCarry(bot, context, events);
+				leaveTown(bot, now, context, events);
+				break;
+			}
 			default:
 			{
 				bot.setLeg(null);
@@ -427,7 +526,7 @@ public final class ColdLife
 			// No scroll, and water between it and the town (an island without a town): it cannot walk, so it goes back
 			// the way it came, paying what the gatekeeper's way here cost (FPC-277).
 			final ZoneCatalog.Teleport link = (zone == null) ? null : zone.teleportFrom(town.name());
-			final long fee = (link == null) ? 0L : Math.min(Math.max(0L, bot.getAdena()), link.fee());
+			final long fee = ((link == null) || freeTeleport(bot, context)) ? 0L : Math.min(Math.max(0L, bot.getAdena()), link.fee());
 			bot.setAdena(bot.getAdena() - fee);
 			bot.setActivity(TO_TOWN);
 			bot.setLeg(TravelLeg.stay(from, now, context.travel().escapeCastMs()));
@@ -663,9 +762,12 @@ public final class ColdLife
 				events.add(new DecisionLog.Event(null, "Sold its loot in " + town.name() + " for " + DecisionLog.num(sold) + " adena"));
 			}
 		}
+		sellOldShots(bot, town, context, events);
 		if (town.hasGrocer())
 		{
-			final SupplyPlanner.Prices prices = context.priceBook().prices(bot.getLevel(), bot.getGearTier(), bot.getClassId());
+			final SupplyPlanner.Prices listed = context.priceBook().prices(bot.getLevel(), bot.getGearTier(), bot.getClassId());
+			// The grocer does not sell D and better shots: those come from the Merchant's shops, below.
+			final SupplyPlanner.Prices prices = buysShotsInShops(bot, context) ? new SupplyPlanner.Prices(listed.potion(), NO_GROCER_SHOTS, listed.escape(), listed.nextTier()) : listed;
 			final SupplyPlanner.Params supply = supplyFor(bot, context);
 			final SupplyPlanner.Purchase bought = SupplyPlanner.shop(bot.getLevel(), bot.getAdena(), bot.getEscapes(), bot.getPotions(), bot.getSoulshots(), bot.getGearTier(), bot.isRewardClaimed(), prices, supply);
 			if (bought.any())
@@ -686,8 +788,23 @@ public final class ColdLife
 			}
 		}
 
+		// D and better shots come from the Merchant's shops, in Gludio (D) and Giran (C).
+		if (shopForShots(bot, town, now, context, events))
+		{
+			bot.setShoppedAt(now);
+			return;
+		}
+
+		// A Merchant puts its adena into shots for the hunters' unmet demand before it spends any on its own gear.
+		if (craftTrip(bot, town, now, context, events))
+		{
+			bot.setShoppedAt(now);
+			return;
+		}
+
 		// Gear, piece by piece, with what is left after supplies.
 		shopGear(bot, town, context, events, now);
+		sellOldShots(bot, town, context, events); // a weapon bought just now may have made its shots useless
 		bot.setShoppedAt(now);
 
 		// Business with a class master or its trainer comes before any break.
@@ -711,6 +828,266 @@ public final class ColdLife
 	}
 
 	/**
+	 * When the shots a bot fires change (it upgraded its weapon, or changed class), the ones it still holds are of no use:
+	 * it sells them to the vendor at half their reference price.
+	 */
+	private static void sellOldShots(ColdBot bot, Town town, Context context, List<DecisionLog.Event> events)
+	{
+		final Workshop shop = context.workshop();
+		final int current = (shop != null) ? shop.shotFor(bot) : LivingSupplies.shotIdForGrade(bot.getClassId(), gradesOf(bot, context.gear(), context.supply().gearTierLevelStep())[0], false);
+		final int old = bot.getShotItem();
+		bot.setShotItem(current);
+		if ((old == 0) || (old == current) || (bot.getSoulshots() <= 0L))
+		{
+			return;
+		}
+		final long sold = bot.getSoulshots();
+		final long back = (shop != null) ? shop.buyBack(old, sold) : -1L;
+		final ShotCrafting.Recipe recipe = ShotCrafting.byShot(old);
+		final long proceeds = (back >= 0L) ? back : (sold * Math.max(0L, context.priceBook().vendorPrice(old)));
+		bot.setSoulshots(0L);
+		bot.setAdena(Math.min(ColdEconomy.MAX_ADENA, bot.getAdena() + proceeds));
+		if (back >= 0L)
+		{
+			events.add(new DecisionLog.Event(null, "Sold its " + DecisionLog.num(sold) + " old shots (item " + old + ") back to the shop in " + recipe.saleTown() + " for " + DecisionLog.num(proceeds) + " adena, now that it fires item " + current));
+		}
+		else
+		{
+			events.add(new DecisionLog.Event(null, "Sold its " + DecisionLog.num(sold) + " old shots (item " + old + ") to the vendor in " + town.name() + " for " + DecisionLog.num(proceeds) + " adena, now that it fires item " + current));
+		}
+	}
+
+	/** @return whether this bot fires shots only the Merchant makes (D grade and better) */
+	private static boolean buysShotsInShops(ColdBot bot, Context context)
+	{
+		final Workshop shop = context.workshop();
+		return (shop != null) && (ShotCrafting.byShot(shop.shotFor(bot)) != null);
+	}
+
+	/**
+	 * Buys the shots a bot fires from the Merchant's shop when it stands in the town that sells them, and goes to that town
+	 * by gatekeeper when it is somewhere else and the shop holds enough to be worth the trip. No shots are made from
+	 * nothing: they leave the shop's stock and the adena goes to the Merchant.
+	 * @return whether it set off for the shop's town
+	 */
+	private static boolean shopForShots(ColdBot bot, Town town, long now, Context context, List<DecisionLog.Event> events)
+	{
+		final Workshop shop = context.workshop();
+		if (shop == null)
+		{
+			return false;
+		}
+		final int shot = shop.shotFor(bot);
+		final ShotCrafting.Recipe recipe = ShotCrafting.byShot(shot);
+		if (recipe == null)
+		{
+			return false;
+		}
+		final SupplyPlanner.Params supply = supplyFor(bot, context);
+		final long wanted = SupplyPlanner.soulshotTarget(bot.isRewardClaimed(), supply) - bot.getSoulshots();
+		final long minimum = Math.max(1L, SupplyPlanner.soulshotMinPurchase(bot.isRewardClaimed(), supply));
+		if (wanted < minimum)
+		{
+			return false;
+		}
+		final long budget = SupplyPlanner.spendable(bot.getAdena(), SupplyPlanner.reserve(bot.getLevel(), bot.getAdena(), supply));
+		final String saleTown = recipe.saleTown();
+		final long price = Math.max(1L, shop.shotPrice(saleTown, shot));
+		final long available = shop.onSale(saleTown, shot);
+		if (saleTown.equals(town.name()))
+		{
+			final long count = Math.min(wanted, Math.min(available, budget / price));
+			if ((count < minimum) || !shop.buyShots(saleTown, shot, count, price))
+			{
+				if (available < minimum)
+				{
+					events.add(new DecisionLog.Event("noshots-" + saleTown, "The shot shop in " + saleTown + " has none to sell. Hunts without shots"));
+				}
+				return false;
+			}
+			bot.setAdena(bot.getAdena() - (count * price));
+			bot.setSoulshots(bot.getSoulshots() + count);
+			events.add(new DecisionLog.Event(null, "Bought " + DecisionLog.num(count) + " shots from the shop in " + saleTown + " for " + DecisionLog.num(count * price) + " adena (" + DecisionLog.num(price) + " each)"));
+			return false;
+		}
+		final Town dest = context.catalog().town(saleTown);
+		final long listedFee = (dest == null) ? -1L : town.feeTo(saleTown);
+		if (listedFee < 0L)
+		{
+			return false;
+		}
+		final long fee = freeTeleport(bot, context) ? 0L : listedFee;
+		final long count = Math.min(wanted, Math.min(available, Math.max(0L, budget - fee) / price));
+		if (count < minimum)
+		{
+			return false;
+		}
+		bot.setAdena(bot.getAdena() - fee);
+		bot.setTown(dest.name());
+		bot.setActivity(TO_TOWN);
+		bot.setLeg(TravelLeg.stay(dest.arrival(), now, context.travel().escapeCastMs()));
+		events.add(new DecisionLog.Event(null, "Goes to " + dest.name() + " for shots (gatekeeper " + DecisionLog.num(fee) + " adena)"));
+		return true;
+	}
+
+	/**
+	 * The Merchant does her town business and crafting trips cold, so a player walking up to her cannot break a trip in the
+	 * middle. She is only a live character while she hunts or walks to her hunting zone.
+	 * @param bot a bot
+	 * @param context the life context
+	 * @return whether the bot has to be cold now
+	 */
+	public static boolean staysCold(ColdBot bot, Context context)
+	{
+		if ((context == null) || (context.workshop() == null) || !isCrafter(bot.getClassId()) || !ShotCrafting.MERCHANT.equalsIgnoreCase(bot.getName()))
+		{
+			return false;
+		}
+		final String activity = bot.getActivity();
+		return !isHunting(activity) && !TO_ZONE.equals(activity);
+	}
+
+	/** @return whether this class can craft the dwarven shot recipes (Artisan and Warsmith); only the Merchant, Sateya, does */
+	public static boolean isCrafter(int classId)
+	{
+		return (classId == 56) || (classId == 118);
+	}
+
+	/**
+	 * A Merchant's business, after its errands: learns a shot recipe that is in a town's stock, buys materials in Giran for
+	 * the shots the hunters want, and goes to Devil's Isle to craft them.
+	 * @return whether it set off
+	 */
+	private static boolean craftTrip(ColdBot bot, Town town, long now, Context context, List<DecisionLog.Event> events)
+	{
+		final Workshop shop = context.workshop();
+		if ((shop == null) || !isCrafter(bot.getClassId()) || !ShotCrafting.MERCHANT.equalsIgnoreCase(bot.getName()) || (bot.getCarryCount() > 0L))
+		{
+			return false;
+		}
+		final long reserve = context.supply().reserveFloor();
+		final Map<Integer, Double> wanted = shop.wanted();
+		final ShotCrafting.Recipe learn = MerchantPlanner.recipeToLearn(bot.getRecipes(), bot.getLevel(), wanted);
+		if (learn != null)
+		{
+			final long price = shop.recipePrice(learn.recipeItemId());
+			final String holder = (bot.getAdena() >= (price + reserve)) ? shop.recipeTown(learn.recipeItemId(), town.name()) : null;
+			if (holder != null)
+			{
+				if (!holder.equals(town.name()))
+				{
+					return hop(bot, town, holder, "the " + learn.shotItemId() + " recipe in its stock", now, context, events);
+				}
+				if (shop.buyRecipe(holder, learn.recipeItemId(), price))
+				{
+					bot.setAdena(bot.getAdena() - price);
+					bot.setRecipes(bot.getRecipes() | ShotCrafting.bit(learn));
+					events.add(new DecisionLog.Event(null, "Bought and learned the recipe for shot " + learn.shotItemId() + " in " + town.name() + " for " + DecisionLog.num(price) + " adena"));
+				}
+			}
+		}
+
+		final Zone isle = context.catalog().zone(CRAFT_ZONE);
+		final ZoneCatalog.Teleport way = (isle == null) ? null : isle.teleportFrom(MATERIALS_TOWN);
+		if ((way == null) || (bot.getEscapes() < SupplyPlanner.MIN_ESCAPES))
+		{
+			return false; // no way to the isle, or no scroll to leave it
+		}
+		final long fee = freeTeleport(bot, context) ? 0L : way.fee();
+		final Map<Integer, Long> held = new HashMap<>();
+		for (ShotCrafting.Recipe recipe : ShotCrafting.RECIPES)
+		{
+			held.put(recipe.shotItemId(), shop.onSale(recipe.saleTown(), recipe.shotItemId()));
+		}
+		final MerchantPlanner.Plan plan = MerchantPlanner.decide(bot.getRecipes(), bot.getLevel(), wanted, held, shop.hoursOfStock(), shop.maxCrafts(), bot.getAdena() - reserve - fee, shop.prices());
+		if (plan == null)
+		{
+			return false;
+		}
+		if (!MATERIALS_TOWN.equals(town.name()))
+		{
+			return hop(bot, town, MATERIALS_TOWN, "the materials for " + DecisionLog.num(plan.shots()) + " shots", now, context, events);
+		}
+		bot.setAdena(bot.getAdena() - plan.cost() - fee);
+		bot.setCarry(plan.recipe().shotItemId(), plan.shots(), plan.recipe().saleTown());
+		moveTo(bot, way.arrival());
+		bot.setTown(null);
+		bot.setActivity(CRAFTING);
+		bot.setLeg(TravelLeg.stay(way.arrival(), now, shop.craftMs()));
+		events.add(new DecisionLog.Event(null, "Bought the materials for " + DecisionLog.num(plan.shots()) + " shots (shot " + plan.recipe().shotItemId() + ") in " + town.name() + " for " + DecisionLog.num(plan.cost()) + " adena. Off to " + CRAFT_ZONE + " to craft them"));
+		return true;
+	}
+
+	/** Pays the gatekeeper to another town for a Merchant's business there; its errands run again on arrival. */
+	private static boolean hop(ColdBot bot, Town from, String to, String why, long now, Context context, List<DecisionLog.Event> events)
+	{
+		final Town dest = context.catalog().town(to);
+		final long fee = (dest == null) ? -1L : from.feeTo(to);
+		if ((fee < 0L) || (dest == from))
+		{
+			return false;
+		}
+		final long pay = 0L; // a true merchant moves its money and goods by alt and warehouse: no gatekeeper fee between towns
+		bot.setTown(dest.name());
+		bot.setActivity(TO_TOWN);
+		bot.setLeg(TravelLeg.stay(dest.arrival(), now, context.travel().escapeCastMs()));
+		events.add(new DecisionLog.Event(null, "Goes to " + dest.name() + " for " + why + " (gatekeeper " + DecisionLog.num(pay) + " adena)"));
+		return true;
+	}
+
+	/** The half hour on the isle is over: the materials are shots now, and the bot reads its Scroll of Escape. */
+	private static void finishCrafting(ColdBot bot, long now, Context context, List<DecisionLog.Event> events)
+	{
+		bot.setEscapes(Math.max(0L, bot.getEscapes() - 1L));
+		bot.setActivity(CRAFT_RETURN);
+		bot.setLeg(TravelLeg.stay(point(bot), now, context.travel().escapeCastMs()));
+		events.add(new DecisionLog.Event(null, "Finished crafting " + DecisionLog.num(bot.getCarryCount()) + " shots. Reads a Scroll of Escape"));
+	}
+
+	/** Back from the isle in Giran: sells there, or pays the gatekeeper to the town it meant to sell in. */
+	private static void arriveFromIsle(ColdBot bot, long now, Context context, List<DecisionLog.Event> events)
+	{
+		final Town giran = context.catalog().town(MATERIALS_TOWN);
+		if (giran == null)
+		{
+			bot.setCarry(0, 0L, null);
+			bot.setLeg(null);
+			bot.setActivity(HUNTING);
+			return;
+		}
+		moveTo(bot, giran.arrival());
+		bot.setTown(giran.name());
+		final String sale = (bot.getCarryTown() == null) ? giran.name() : bot.getCarryTown();
+		final Town dest = context.catalog().town(sale);
+		final long fee = (dest == null) ? -1L : giran.feeTo(sale);
+		final long pay = 0L; // the Merchant's trips between towns cost no gatekeeper fee
+		if (sale.equals(giran.name()) || (fee < 0L))
+		{
+			listCarry(bot, context, events);
+			leaveTown(bot, now, context, events);
+			return;
+		}
+		bot.setTown(dest.name());
+		bot.setActivity(DELIVERING);
+		bot.setLeg(TravelLeg.stay(dest.arrival(), now, context.travel().escapeCastMs()));
+		events.add(new DecisionLog.Event(null, "Back in Giran. Heads to " + dest.name() + " to sell its shots (gatekeeper " + DecisionLog.num(pay) + " adena)"));
+	}
+
+	/** Puts the shots a Merchant carries on sale in the town it is in. */
+	private static void listCarry(ColdBot bot, Context context, List<DecisionLog.Event> events)
+	{
+		final Workshop shop = context.workshop();
+		final long count = bot.getCarryCount();
+		if ((shop != null) && (count > 0L) && (bot.getTown() != null))
+		{
+			shop.list(bot.getTown(), bot.getId(), bot.getCarryItem(), count);
+			final ShotCrafting.Recipe recipe = ShotCrafting.byShot(bot.getCarryItem());
+			events.add(new DecisionLog.Event(null, "Put " + DecisionLog.num(count) + " shots (shot " + bot.getCarryItem() + ") on sale in " + bot.getTown() + ((recipe == null) ? "" : (", never below " + DecisionLog.num(ShotCrafting.floorPrice(recipe, shop.prices())) + " adena each"))));
+		}
+		bot.setCarry(0, 0L, null);
+	}
+
+	/**
 	 * Moves the class-change quest along while hunting: a bot that reaches the level of its next class change sets out to
 	 * take the quest, and one whose quest hunt is over heads back to hand it in.
 	 */
@@ -727,7 +1104,7 @@ public final class ColdLife
 			{
 				return;
 			}
-			final int target = ClassPath.next(bot.getClassId(), bot.getId());
+			final int target = ClassPath.next(bot.getClassId(), bot.getId(), bot.getName());
 			if ((target < 0) || (ClassPath.master(bot.getClassId(), target) == null))
 			{
 				return;
@@ -973,8 +1350,8 @@ public final class ColdLife
 		if ((choice == null) && (current != null))
 		{
 			// Nothing better it can afford: go back to where it was, even if it no longer fits perfectly.
-			final ZoneChooser.Choice back = ZoneChooser.route(current, town, catalog);
-			if ((back != null) && (back.fee() <= bot.getAdena()))
+			final ZoneChooser.Choice back = ZoneChooser.route(current, town, catalog, situation.freeTeleport());
+			if ((back != null) && (back.fee() <= bot.getAdena()) && !situation.cannotReturnFrom(current, catalog))
 			{
 				choice = back;
 			}
@@ -1071,11 +1448,21 @@ public final class ColdLife
 		return errand;
 	}
 
+	/**
+	 * @return whether the gatekeepers teleport this bot for free: its own level (not the lower one it hunts at while avoiding a
+	 *         zone) is at or below the server's MaxFreeTeleportLevel, as for a player
+	 */
+	private static boolean freeTeleport(ColdBot bot, Context context)
+	{
+		final int limit = context.travel().freeTeleportLevel();
+		return (limit > 0) && (bot.getLevel() <= limit);
+	}
+
 	/** @return the gatekeeper fee from this town back to the bot's zone (0 on foot or when it has no zone) */
 	private static long feeBack(ColdBot bot, Town town, Context context)
 	{
 		final Zone zone = context.catalog().zone(bot.getZone());
-		final ZoneChooser.Choice back = (zone == null) ? null : ZoneChooser.route(zone, town, context.catalog());
+		final ZoneChooser.Choice back = (zone == null) ? null : ZoneChooser.route(zone, town, context.catalog(), freeTeleport(bot, context));
 		return (back == null) ? 0L : Math.max(0L, back.fee());
 	}
 
@@ -1451,7 +1838,7 @@ public final class ColdLife
 		final ColdRisk.State risk = bot.getRisk();
 		final boolean avoiding = risk.avoiding(now);
 		final int level = avoiding ? Math.max(1, bot.getLevel() - ColdRisk.AVOID_LEVEL_PENALTY) : bot.getLevel();
-		return new ZoneChooser.Situation(level, bot.getRace(), current, town, budget, occupancy, context.travel().zoneCapacity(), avoiding ? risk.avoidZone() : null);
+		return new ZoneChooser.Situation(level, bot.getRace(), current, town, budget, occupancy, context.travel().zoneCapacity(), avoiding ? risk.avoidZone() : null, freeTeleport(bot, context), bot.getEscapes() > 0);
 	}
 
 	private static String planKey(GoalPlanner.Plan plan)

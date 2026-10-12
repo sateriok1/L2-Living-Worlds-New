@@ -771,12 +771,51 @@ public class FakePlayerStoreFactory
 	 */
 	public static List<FakePlayerStoreItem> generateSell(Location where, int level, boolean fullStock)
 	{
+		return generateSell(where, level, fullStock, _shopkeeperItems);
+	}
+
+	private static volatile Set<Integer> _shopkeeperItems = Set.of(); // items only a named shopkeeper sells
+
+	/** @param items item ids that crowd vendors do not sell with the supply's goods (a named shopkeeper sells them) */
+	public static void setShopkeeperItems(Set<Integer> items)
+	{
+		_shopkeeperItems = (items == null) ? Set.of() : Set.copyOf(items);
+	}
+
+	/**
+	 * The lines a named shopkeeper sells: the supply's goods at a spot, limited to some items.
+	 * @param where where the shop stands
+	 * @param items the item ids it sells
+	 * @return its lines, empty when the supply holds none of them
+	 */
+	public static List<FakePlayerStoreItem> generateShopkeeper(Location where, Set<Integer> items)
+	{
+		final FakePlayerStoreSupply supply = _supply;
+		final List<FakePlayerStoreItem> stock = new ArrayList<>();
+		if (supply == null)
+		{
+			return stock;
+		}
+		for (FakePlayerStoreSupply.Offer offer : supply.offers(where))
+		{
+			final ItemTemplate item = items.contains(offer.itemId()) ? ItemData.getInstance().getTemplate(offer.itemId()) : null;
+			if ((item != null) && (offer.count() > 0))
+			{
+				stock.add(new FakePlayerStoreItem(STORE_ITEM_OID.getAndIncrement(), item.getId(), 0, offer.count(), (int) Math.min(Integer.MAX_VALUE, Math.max(offer.minPrice(), priced(effRef(item.getReferencePrice()), 1.0, 1.4))), offer.source()));
+			}
+		}
+		return stock;
+	}
+
+	private static List<FakePlayerStoreItem> generateSell(Location where, int level, boolean fullStock, Set<Integer> excluded)
+	{
 		final FakePlayerStoreSupply supply = _supply;
 		if (supply == null)
 		{
 			return generateRolledSell(level, fullStock);
 		}
 		final List<FakePlayerStoreSupply.Offer> offers = new ArrayList<>(supply.offers(where));
+		offers.removeIf(offer -> excluded.contains(offer.itemId()));
 		final List<FakePlayerStoreItem> stock = new ArrayList<>();
 		if (offers.size() < MIN_SUPPLY_LINES)
 		{
@@ -789,7 +828,7 @@ public class FakePlayerStoreFactory
 			final ItemTemplate item = ItemData.getInstance().getTemplate(offer.itemId());
 			if ((item != null) && (offer.count() > 0))
 			{
-				stock.add(new FakePlayerStoreItem(STORE_ITEM_OID.getAndIncrement(), item.getId(), 0, offer.count(), priced(effRef(item.getReferencePrice()), 1.0, 1.4), offer.source()));
+				stock.add(new FakePlayerStoreItem(STORE_ITEM_OID.getAndIncrement(), item.getId(), 0, offer.count(), (int) Math.min(Integer.MAX_VALUE, Math.max(offer.minPrice(), priced(effRef(item.getReferencePrice()), 1.0, 1.4))), offer.source()));
 			}
 		}
 		return (stock.size() < MIN_SUPPLY_LINES) ? new ArrayList<>() : stock;

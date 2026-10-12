@@ -402,7 +402,7 @@ public class HotColdHandoff
 			{
 				break;
 			}
-			if (bot.isHotLock() || _hot.containsKey(bot.getId()) || _pending.contains(bot.getId()) || _orphans.contains(bot.getId()))
+			if (bot.isHotLock() || _hot.containsKey(bot.getId()) || _pending.contains(bot.getId()) || _orphans.contains(bot.getId()) || ColdLife.staysCold(bot, _life))
 			{
 				continue;
 			}
@@ -528,6 +528,12 @@ public class HotColdHandoff
 		entry._deadSince = 0;
 		final String activity = (bot.getActivity() == null) ? ColdLife.HUNTING : bot.getActivity();
 
+		if (ColdLife.staysCold(bot, life))
+		{
+			cool(bot, player, now); // the Merchant does her town business and trips cold, so nobody breaks one
+			return;
+		}
+
 		if (ColdLife.isHunting(activity))
 		{
 			if (!ColdLife.HUNTING.equals(entry._applied))
@@ -585,7 +591,7 @@ public class HotColdHandoff
 			{
 				phantoms.livingCastEscape(player, (int) Math.min(Integer.MAX_VALUE, leg.durationMs())); // reads the scroll again
 			}
-			if (ColdLife.AFK.equals(activity) || ColdLife.RESTING.equals(activity) || ColdLife.DEAD.equals(activity))
+			if (ColdLife.AFK.equals(activity) || ColdLife.RESTING.equals(activity) || ColdLife.DEAD.equals(activity) || ColdLife.CRAFTING.equals(activity))
 			{
 				phantoms.livingSit(player, true); // AFK, resting, or back on its feet in town after dying while cold
 			}
@@ -668,7 +674,7 @@ public class HotColdHandoff
 		boolean teleported = false;
 		if (!after.equals(before))
 		{
-			if (ColdLife.ESCAPING.equals(before) || ColdLife.TO_TOWN.equals(before))
+			if (ColdLife.ESCAPING.equals(before) || ColdLife.TO_TOWN.equals(before) || ColdLife.CRAFT_RETURN.equals(before) || ColdLife.DELIVERING.equals(before) || ColdLife.CRAFTING.equals(after))
 			{
 				// The cast is over, or the gatekeeper was paid: appear at the town's arrival point (the row already moved there).
 				phantoms.livingTeleport(player, bot.getX(), bot.getY(), bot.getZ());
@@ -683,6 +689,24 @@ public class HotColdHandoff
 					break;
 				}
 				case ColdLife.WALKING_TO_TOWN:
+				{
+					phantoms.setLivingIdle(player, true);
+					break;
+				}
+				case ColdLife.CRAFTING:
+				{
+					phantoms.setLivingIdle(player, true);
+					phantoms.livingSit(player, true); // sits on the isle while its materials turn into shots
+					break;
+				}
+				case ColdLife.CRAFT_RETURN:
+				{
+					phantoms.setLivingIdle(player, true);
+					phantoms.livingSit(player, false);
+					phantoms.livingCastEscape(player, (int) Math.min(Integer.MAX_VALUE, (leg == null) ? 0L : leg.durationMs()));
+					break;
+				}
+				case ColdLife.DELIVERING:
 				{
 					phantoms.setLivingIdle(player, true);
 					break;
@@ -1049,7 +1073,7 @@ public class HotColdHandoff
 	 */
 	public void activateForParty(ColdBot bot, long now)
 	{
-		if (bot.isHotLock() || _hot.containsKey(bot.getId()) || _pending.contains(bot.getId()) || _orphans.contains(bot.getId()))
+		if (bot.isHotLock() || _hot.containsKey(bot.getId()) || _pending.contains(bot.getId()) || _orphans.contains(bot.getId()) || ColdLife.staysCold(bot, _life))
 		{
 			return;
 		}
@@ -1446,6 +1470,25 @@ public class HotColdHandoff
 			return false;
 		}
 		player.addAdena(ItemProcessType.REWARD, (int) Math.min(Integer.MAX_VALUE, adena), null, false);
+		return true;
+	}
+
+	/**
+	 * Takes adena from a bot's live character.
+	 * @param id the bot's id
+	 * @param adena the adena
+	 * @return false when the bot has no live character (charge its row instead)
+	 */
+	public boolean chargeHot(long id, long adena)
+	{
+		final HotEntry entry = _hot.get(id);
+		final Player player = (entry == null) ? null : entry._player;
+		if (player == null)
+		{
+			return false;
+		}
+		final long held = player.getAdena();
+		player.reduceAdena(ItemProcessType.REWARD, (int) Math.max(0L, Math.min(Integer.MAX_VALUE, Math.min(adena, held))), null, false);
 		return true;
 	}
 

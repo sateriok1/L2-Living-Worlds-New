@@ -79,6 +79,21 @@ public final class LivingPartyTravel implements BiPredicate<Player, Player>
 	 */
 	public static Plan plan(Point from, Point to, ZoneCatalog catalog, double speed, long adena)
 	{
+		return plan(from, to, catalog, speed, adena, false);
+	}
+
+	/**
+	 * Plans a trip like a player, for a bot that may teleport for free.
+	 * @param from where it is
+	 * @param to where it goes
+	 * @param catalog the towns
+	 * @param speed walking speed, units per second
+	 * @param adena what it can spend
+	 * @param free true when the gatekeepers charge it nothing (its level is at or below the server's MaxFreeTeleportLevel)
+	 * @return the plan
+	 */
+	public static Plan plan(Point from, Point to, ZoneCatalog catalog, double speed, long adena, boolean free)
+	{
 		final double direct = from.distance(to);
 		final double pace = Math.max(1.0, speed);
 		final Plan walk = new Plan(null, null, 0L, null, (long) Math.ceil(direct / pace));
@@ -92,8 +107,9 @@ public final class LivingPartyTravel implements BiPredicate<Player, Player>
 		{
 			return walk;
 		}
-		final long fee = start.feeTo(end.name());
-		if ((fee < 0) || (fee > adena))
+		final long listed = start.feeTo(end.name());
+		final long fee = free ? 0L : listed; // free: no charge, but a route must still exist (listed >= 0)
+		if ((listed < 0) || (fee > adena))
 		{
 			return walk;
 		}
@@ -124,6 +140,7 @@ public final class LivingPartyTravel implements BiPredicate<Player, Player>
 
 	private final ZoneCatalog _catalog;
 	private final double _speed;
+	private final int _freeLevel;
 	private Plan _plan;
 	private boolean _toGatekeeper;
 	private long _lastStepAt;
@@ -135,8 +152,19 @@ public final class LivingPartyTravel implements BiPredicate<Player, Player>
 	 */
 	public LivingPartyTravel(ZoneCatalog catalog, double speed)
 	{
+		this(catalog, speed, 0);
+	}
+
+	/**
+	 * @param catalog the towns and gatekeepers
+	 * @param speed walking speed, units per second
+	 * @param freeTeleportLevel the highest level the gatekeepers teleport for free (0 or less: nobody)
+	 */
+	public LivingPartyTravel(ZoneCatalog catalog, double speed, int freeTeleportLevel)
+	{
 		_catalog = catalog;
 		_speed = Math.max(1.0, speed);
+		_freeLevel = freeTeleportLevel;
 	}
 
 	/**
@@ -145,7 +173,7 @@ public final class LivingPartyTravel implements BiPredicate<Player, Player>
 	 */
 	public Plan start(Player bot, Player leader)
 	{
-		_plan = plan(point(bot), point(leader), _catalog, _speed, bot.getAdena());
+		_plan = plan(point(bot), point(leader), _catalog, _speed, bot.getAdena(), (_freeLevel > 0) && (bot.getLevel() <= _freeLevel));
 		_toGatekeeper = _plan.teleports();
 		_lastStepAt = System.currentTimeMillis();
 		return _plan;

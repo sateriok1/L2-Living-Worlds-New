@@ -35,9 +35,14 @@ public interface FakePlayerStoreSupply
 	 * @param itemId the item
 	 * @param count how many it holds
 	 * @param source what to hand back to the other methods (opaque to the store)
+	 * @param minPrice the lowest unit price the line may be sold at, or 0 for the store's own pricing
 	 */
-	record Offer(int itemId, int count, Object source)
+	record Offer(int itemId, int count, Object source, long minPrice)
 	{
+		public Offer(int itemId, int count, Object source)
+		{
+			this(itemId, count, source, 0L);
+		}
 	}
 
 	/**

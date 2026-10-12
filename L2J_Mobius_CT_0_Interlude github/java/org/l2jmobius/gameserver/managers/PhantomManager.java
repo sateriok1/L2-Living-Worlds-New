@@ -2686,7 +2686,7 @@ public class PhantomManager implements IXmlReader
 			}
 			else
 			{
-				final boolean female = Rnd.nextBoolean();
+				final boolean female = org.l2jmobius.gameserver.livingpop.ShotCrafting.MERCHANT.equalsIgnoreCase(name) || (!org.l2jmobius.gameserver.livingpop.ColdSeedPlan.OWNER.equalsIgnoreCase(name) && !org.l2jmobius.gameserver.livingpop.ColdSeedPlan.ZION.equalsIgnoreCase(name) && Rnd.nextBoolean()); // the Merchant, Sateya, is a woman; aiSateriok and aiSonOfZion are men
 				final PlayerAppearance appearance = new PlayerAppearance((byte) Rnd.get(0, 2), (byte) Rnd.get(0, 3), (byte) Rnd.get(0, 2), female);
 				// isBuddyBot = true: a living-population character is never counted as a human observer, mirroring phantoms.
 				phantom = Player.create(template, ACCOUNT_NAME_LIVINGPOP, name, appearance, true);
@@ -2696,6 +2696,12 @@ public class PhantomManager implements IXmlReader
 					return null;
 				}
 			}
+		}
+
+		final String customTitle = org.l2jmobius.gameserver.livingpop.ColdSeedPlan.titleOf(phantom.getName());
+		if (customTitle != null)
+		{
+			phantom.setTitle(customTitle); // the named bots' titles (Sateya, aiSateriok, aiSonOfZion, aiTeras), kept on every spawn
 		}
 
 		// The cold row is the source of truth: bring the character up to the row's level even when reloaded (it may be

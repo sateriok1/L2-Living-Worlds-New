@@ -83,6 +83,11 @@ public class ColdBot
 	private volatile double _kills;
 	private volatile long _adenaEarned;
 	private volatile long _shoppedAt; // when it last finished its errands in town (0 = never), kept with the counters
+	private volatile int _shotItem; // the shot item its soulshot stock is of (0 = not noted yet), kept with the counters
+	private volatile int _recipes; // a Merchant: bits of the shot recipes it has learned (ShotCrafting.bit), kept with the counters
+	private volatile int _carryItem; // a Merchant: the shots it crafted and has yet to put on sale
+	private volatile long _carryCount;
+	private volatile String _carryTown; // where it puts them on sale
 
 	/** @return the death factor of the virtual party the bot hunts in, 0 when it hunts alone (not saved) */
 	public double getPartyDeathFactor()
@@ -499,6 +504,58 @@ public class ColdBot
 		_adenaEarned = Math.min(Long.MAX_VALUE / 2, _adenaEarned + Math.max(0L, adena));
 	}
 
+	/** @return the shot item its stock is of, or 0 */
+	public int getShotItem()
+	{
+		return _shotItem;
+	}
+
+	public void setShotItem(int shotItem)
+	{
+		_shotItem = Math.max(0, shotItem);
+	}
+
+	/** @return bits of the shot recipes this bot has learned */
+	public int getRecipes()
+	{
+		return _recipes;
+	}
+
+	public void setRecipes(int recipes)
+	{
+		_recipes = Math.max(0, recipes);
+	}
+
+	/** @return the shot item a Merchant carries to its shop, or 0 */
+	public int getCarryItem()
+	{
+		return _carryItem;
+	}
+
+	/** @return how many shots it carries */
+	public long getCarryCount()
+	{
+		return _carryCount;
+	}
+
+	/** @return the town it puts them on sale in */
+	public String getCarryTown()
+	{
+		return _carryTown;
+	}
+
+	/**
+	 * @param item the shot item
+	 * @param count how many (0 for nothing)
+	 * @param town where they go on sale
+	 */
+	public void setCarry(int item, long count, String town)
+	{
+		_carryItem = (count > 0L) ? item : 0;
+		_carryCount = Math.max(0L, count);
+		_carryTown = (count > 0L) ? town : null;
+	}
+
 	/** @return when it last finished its errands in town, or 0 */
 	public long getShoppedAt()
 	{
@@ -517,11 +574,11 @@ public class ColdBot
 	public String getStatsJson()
 	{
 		final String decisions = _decisions.toJson();
-		if ((_kills <= 0.0) && (_adenaEarned <= 0L) && (_shoppedAt <= 0L))
+		if ((_kills <= 0.0) && (_adenaEarned <= 0L) && (_shoppedAt <= 0L) && (_recipes == 0) && (_carryCount <= 0L) && (_shotItem == 0))
 		{
 			return decisions;
 		}
-		return decisions.substring(0, decisions.length() - 1) + ",\"counters\":{\"kills\":" + String.format(Locale.US, "%.1f", _kills) + ",\"adena\":" + _adenaEarned + ((_shoppedAt > 0L) ? (",\"shoppedAt\":" + _shoppedAt) : "") + "}}";
+		return decisions.substring(0, decisions.length() - 1) + ",\"counters\":{\"kills\":" + String.format(Locale.US, "%.1f", _kills) + ",\"adena\":" + _adenaEarned + ((_shoppedAt > 0L) ? (",\"shoppedAt\":" + _shoppedAt) : "") + ((_recipes != 0) ? (",\"recipes\":" + _recipes) : "") + ((_shotItem != 0) ? (",\"shotItem\":" + _shotItem) : "") + ((_carryCount > 0L) ? (",\"carryItem\":" + _carryItem + ",\"carryCount\":" + _carryCount + ",\"carryTown\":\"" + _carryTown + "\"") : "") + "}}";
 	}
 
 	/**
@@ -534,6 +591,9 @@ public class ColdBot
 		_kills = 0.0;
 		_adenaEarned = 0L;
 		_shoppedAt = 0L;
+		_recipes = 0;
+		_shotItem = 0;
+		setCarry(0, 0L, null);
 		if ((statsJson == null) || statsJson.isBlank())
 		{
 			return;
@@ -554,6 +614,18 @@ public class ColdBot
 				if (counters.get("shoppedAt") instanceof Number shoppedAt)
 				{
 					_shoppedAt = Math.max(0L, shoppedAt.longValue());
+				}
+				if (counters.get("shotItem") instanceof Number shotItem)
+				{
+					_shotItem = Math.max(0, shotItem.intValue());
+				}
+				if (counters.get("recipes") instanceof Number recipes)
+				{
+					_recipes = Math.max(0, recipes.intValue());
+				}
+				if ((counters.get("carryItem") instanceof Number item) && (counters.get("carryCount") instanceof Number count) && (counters.get("carryTown") instanceof String town))
+				{
+					setCarry(item.intValue(), count.longValue(), town);
 				}
 			}
 		}

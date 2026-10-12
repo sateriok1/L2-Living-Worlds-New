@@ -203,6 +203,54 @@ public final class ClassPath
 	 * @param botId its id
 	 * @return the next class, or -1 when there is none
 	 */
+	public static int next(int classId, long botId, String name)
+	{
+		// The Merchant is a dwarf who becomes an Artisan, then a Warsmith.
+		if (ShotCrafting.MERCHANT.equalsIgnoreCase(name) && (classId == 53))
+		{
+			return 56;
+		}
+		// The owner's bot is a human Fighter who becomes a Warrior, a Gladiator and a Duelist.
+		if (ColdSeedPlan.OWNER.equalsIgnoreCase(name))
+		{
+			switch (classId)
+			{
+				case 0:
+				{
+					return 1;
+				}
+				case 1:
+				{
+					return 2;
+				}
+				case 2:
+				{
+					return 88;
+				}
+			}
+		}
+		// aiSonOfZion: a Mystic who becomes a Cleric and a Bishop, or an Orc Fighter who becomes a Raider (then Destroyer and Titan).
+		if (ColdSeedPlan.ZION.equalsIgnoreCase(name))
+		{
+			switch (classId)
+			{
+				case 10:
+				{
+					return 15;
+				}
+				case 15:
+				{
+					return 16;
+				}
+				case 44:
+				{
+					return 45;
+				}
+			}
+		}
+		return next(classId, botId);
+	}
+
 	public static int next(int classId, long botId)
 	{
 		final List<Integer> options = NEXT.getOrDefault(classId, List.of());
