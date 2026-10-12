@@ -34,6 +34,8 @@ import org.l2jmobius.gameserver.livingpop.ColdSeedPlan;
 import org.l2jmobius.gameserver.livingpop.DecisionLog;
 import org.l2jmobius.gameserver.livingpop.DropYield;
 import org.l2jmobius.gameserver.livingpop.MerchantPlanner;
+import org.l2jmobius.gameserver.livingpop.RaidLoot;
+import org.l2jmobius.gameserver.livingpop.RaidPlanner;
 import org.l2jmobius.gameserver.livingpop.ShotCrafting;
 import org.l2jmobius.gameserver.livingpop.ShotDemand;
 import org.l2jmobius.gameserver.livingpop.TownStock;
@@ -90,6 +92,7 @@ public class LivingTravelTest
 		testTownStock();
 		testShotDemand();
 		testMerchant();
+		testRaids();
 		testLootSale();
 		testColdRisk();
 		testColdDeathAndRest();
@@ -788,6 +791,64 @@ public class LivingTravelTest
 		merchant.setRecipes(5);
 		saved.setStatsJson(merchant.getStatsJson());
 		check("its recipes and the shots it carries are saved", (saved.getRecipes() == 5) && (saved.getCarryItem() == 1463) && (saved.getCarryCount() == 500L) && "Gludio".equals(saved.getCarryTown()));
+	}
+
+	private static void testRaids()
+	{
+		final RaidPlanner.Params params = RaidPlanner.Params.defaults();
+		final RaidPlanner.Boss boss = new RaidPlanner.Boss(25202, 400_000.0, 2400.0, 0.5);
+		final List<RaidPlanner.Member> pool = new ArrayList<>();
+		pool.add(new RaidPlanner.Member(1, RaidPlanner.Seat.TANK, 100.0, 9000.0, 900.0, 0.0, 1.0));
+		pool.add(new RaidPlanner.Member(2, RaidPlanner.Seat.HEALER, 10.0, 5000.0, 400.0, 600.0, 1.0));
+		pool.add(new RaidPlanner.Member(3, RaidPlanner.Seat.BUFFER, 10.0, 5000.0, 400.0, 0.0, 1.3));
+		for (int i = 0; i < 6; i++)
+		{
+			pool.add(new RaidPlanner.Member(10 + i, RaidPlanner.Seat.DAMAGE, 250.0 - (i * 10), 6000.0, 500.0, 0.0, 1.0));
+		}
+		final RaidPlanner.Team team = RaidPlanner.assemble(boss, pool, params);
+		check("a strong pool makes a team that can win", (team != null) && (team.winChance() >= params.minWinChance()));
+		check("the team is as small as it can be and no smaller than the minimum", (team != null) && (team.members().size() >= params.minSize()) && (team.members().size() <= params.maxSize()));
+		check("it takes the sturdiest tank and the best damage dealers first", (team != null) && team.members().get(0).id() == 1 && team.members().stream().anyMatch(m -> m.id() == 10));
+		check("a boss too tough for the pool waits", RaidPlanner.assemble(new RaidPlanner.Boss(1, 50_000_000.0, 2400.0, 0.5), pool, params) == null);
+		final List<RaidPlanner.Member> noHealer = new ArrayList<>(pool);
+		noHealer.removeIf(m -> m.seat() == RaidPlanner.Seat.HEALER);
+		check("no healer means no raid", RaidPlanner.assemble(boss, noHealer, params) == null);
+		final RaidPlanner.Team weak = RaidPlanner.fight(boss, List.of(pool.get(0), pool.get(1)), params);
+		check("two bots cannot kill it in time", weak.winChance() < 0.5);
+		check("buffers raise the damage and shorten the fight", RaidPlanner.fight(boss, pool, params).killSeconds() < RaidPlanner.fight(boss, noBuffer(pool), params).killSeconds());
+		// Loot: the groups roll, and the items are shared evenly.
+		final java.util.Random random = new java.util.Random(7);
+		final List<RaidLoot.Group> groups = List.of(new RaidLoot.Group(100.0, List.of(new RaidLoot.Entry(57, 100.0, 1000L, 1000L))), new RaidLoot.Group(100.0, List.of(new RaidLoot.Entry(81, 50.0, 1L, 1L), new RaidLoot.Entry(2500, 50.0, 1L, 1L))), new RaidLoot.Group(0.0, List.of(new RaidLoot.Entry(151, 100.0, 1L, 1L))));
+		final List<RaidLoot.Drop> drops = RaidLoot.roll(groups, 1.0, 1.0, random);
+		check("a group at 100 percent always drops one of its items and one at 0 never does", (drops.size() == 2) && drops.stream().noneMatch(d -> d.itemId() == 151));
+		final List<RaidLoot.Drop> many = List.of(new RaidLoot.Drop(57, 1003L), new RaidLoot.Drop(1, 1L), new RaidLoot.Drop(2, 1L), new RaidLoot.Drop(3, 1L), new RaidLoot.Drop(4, 1L), new RaidLoot.Drop(5, 1L), new RaidLoot.Drop(6, 1L));
+		final List<List<RaidLoot.Drop>> shares = RaidLoot.share(many, 3, 57, d -> (d.itemId() == 57) ? d.count() : (d.count() * (d.itemId() == 1 ? 300L : 100L)), 1);
+		long total = 0L;
+		long adena = 0L;
+		long low = Long.MAX_VALUE;
+		long high = 0L;
+		for (List<RaidLoot.Drop> share : shares)
+		{
+			long mine = 0L;
+			for (RaidLoot.Drop drop : share)
+			{
+				mine += (drop.itemId() == 57) ? drop.count() : (drop.count() * (drop.itemId() == 1 ? 300L : 100L));
+				adena += (drop.itemId() == 57) ? drop.count() : 0L;
+			}
+			total += mine;
+			low = Math.min(low, mine);
+			high = Math.max(high, mine);
+		}
+		check("nothing is lost when the loot is shared", (adena == 1003L) && (total == 1003L + 300L + 500L));
+		check("the shares are as even as whole items allow", (high - low) <= 301L);
+		check("every member gets an item", shares.stream().allMatch(s -> s.stream().anyMatch(d -> d.itemId() != 57)));
+	}
+
+	private static List<RaidPlanner.Member> noBuffer(List<RaidPlanner.Member> pool)
+	{
+		final List<RaidPlanner.Member> list = new ArrayList<>(pool);
+		list.removeIf(m -> m.seat() == RaidPlanner.Seat.BUFFER);
+		return list;
 	}
 
 	private static void testShotDemand()

@@ -149,6 +149,8 @@ jobs:
             "java/org/l2jmobius/gameserver/livingpop/ZoneCombat.java" \
             "java/org/l2jmobius/gameserver/livingpop/ShotCrafting.java" \
             "java/org/l2jmobius/gameserver/livingpop/MerchantPlanner.java" \
+            "java/org/l2jmobius/gameserver/livingpop/RaidLoot.java" \
+            "java/org/l2jmobius/gameserver/livingpop/RaidPlanner.java" \
             "java/org/l2jmobius/gameserver/livingpop/ShotDemand.java" \
             tests/java/*.java
           java -cp build/test-classes FakePlayerChatParsingTest
