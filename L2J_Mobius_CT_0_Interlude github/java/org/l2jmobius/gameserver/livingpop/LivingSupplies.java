@@ -93,6 +93,27 @@ public final class LivingSupplies
 	}
 
 	/**
+	 * How much of a span a stock of shots or potions lasts: the stock over what the span uses at the rate, 0 to 1. A stock used at no rate
+	 * is never short (1); a span with no length counts the stock as there or not.
+	 * @param stock the count held
+	 * @param perHour the count used an hour
+	 * @param hours the length of the span
+	 * @return the share of the span it covers
+	 */
+	public static double coverage(long stock, double perHour, double hours)
+	{
+		if (perHour <= 0.0)
+		{
+			return 1.0;
+		}
+		if (hours <= 0.0)
+		{
+			return (stock > 0L) ? 1.0 : 0.0;
+		}
+		return Math.max(0.0, Math.min(1.0, stock / (perHour * hours)));
+	}
+
+	/**
 	 * How fast a bot of this class drinks potions while cold, against a melee fighter: in step with the stock it carries
 	 * (see {@link #potionStockFor}), as tanks take the most hits and casters and archers fight from range.
 	 * @param classId the bot's class id

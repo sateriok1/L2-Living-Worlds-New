@@ -75,14 +75,36 @@ public final class RaidPlanner
 	 * A candidate for the team.
 	 * @param id the bot
 	 * @param seat the seat its class takes
-	 * @param dps its damage a second against the boss, before buffs
+	 * @param dps its damage a second against the boss with its shots, before buffs
 	 * @param hp its HP
 	 * @param pDef its P.Def
 	 * @param healPerSecond the HP a second it heals (healers)
 	 * @param buff the damage multiple its buffs give the team (buffers; 1 = none)
+	 * @param plainDps its damage a second once its shots are used up
+	 * @param shotSeconds how long its stock of shots lasts in a fight (infinite when it needs none)
+	 * @param potionHps the HP a second it gives itself drinking potions
+	 * @param potionSeconds how long its stock of potions lasts in a fight
 	 */
-	public record Member(long id, Seat seat, double dps, double hp, double pDef, double healPerSecond, double buff)
+	public record Member(long id, Seat seat, double dps, double hp, double pDef, double healPerSecond, double buff, double plainDps, double shotSeconds, double potionHps, double potionSeconds)
 	{
+		/** A member with shots and no potions to count (always shot). */
+		public Member(long id, Seat seat, double dps, double hp, double pDef, double healPerSecond, double buff)
+		{
+			this(id, seat, dps, hp, pDef, healPerSecond, buff, dps, Double.POSITIVE_INFINITY, 0.0, 0.0);
+		}
+
+		/** @return the damage it does in this many seconds: with shots while they last, then without */
+		double damageIn(double seconds)
+		{
+			final double shot = Math.min(seconds, shotSeconds);
+			return (dps * shot) + (plainDps * Math.max(0.0, seconds - shot));
+		}
+
+		/** @return the share of a fight of this length that its potions cover */
+		double potionShare(double fightSeconds)
+		{
+			return (potionHps <= 0.0) ? 0.0 : Math.max(0.0, Math.min(1.0, potionSeconds / fightSeconds));
+		}
 	}
 
 	/**
@@ -156,7 +178,7 @@ public final class RaidPlanner
 		{
 			return new Team(List.copyOf(team), Double.POSITIVE_INFINITY, 0.0, 0.0);
 		}
-		final double partyDamage = dps * Math.min(params.buffCap(), buff);
+		final double damageMultiple = Math.min(params.buffCap(), buff);
 		// What hits the party, in attack power a second: the tank takes the boss's plain hits and its single-target skills, and every member
 		// takes the area skills. Minions are held by the tank and killed first: their HP adds to the work, and they hit only until they are dead
 		// (on average half of that time, as they fall one by one). Skill effects (holds, stuns) and the minions' skills are not modeled.
@@ -180,27 +202,35 @@ public final class RaidPlanner
 				tankPower += strike.power() * strike.perSecond();
 			}
 		}
-		final double kill = (boss.hp() + minionHp) / partyDamage;
-		final double clear = minionHp / partyDamage;
+		// Shots run out: a member does its shot damage while its stock lasts and its plain damage after, so the fight length is found from the damage done by then.
+		final double kill = timeFor(boss.hp() + minionHp, team, damageMultiple);
+		if (Double.isInfinite(kill))
+		{
+			return new Team(List.copyOf(team), Double.POSITIVE_INFINITY, 0.0, 0.0);
+		}
+		final double clear = (minionHp > 0.0) ? timeFor(minionHp, team, damageMultiple) : 0.0;
 		final double scale = params.hitScale() * params.burst();
 		final double tankLoad = scale * (tankPower + areaPower) / Math.max(1.0, tank.pDef());
 		final double minionLoad = 0.5 * scale * minionPower / Math.max(1.0, tank.pDef());
 		double othersLoad = 0.0;
 		double othersHp = 0.0;
+		double othersPotions = 0.0;
 		for (Member member : team)
 		{
 			if (member != tank)
 			{
 				othersLoad += scale * areaPower / Math.max(1.0, member.pDef());
 				othersHp += member.hp();
+				othersPotions += member.potionHps() * member.potionShare(kill);
 			}
 		}
+		final double tankPotions = tank.potionHps() * tank.potionShare(kill); // a member drinks only while its potions last
 		final double full = Math.min(1.0, params.healSeconds() / kill);
 		final double heal = healing * (full + (0.25 * (1.0 - full)));
 		// The healers heal the tank first, then whoever else the area skills hurt (a perfect healer: optimistic).
-		final double tankNet = Math.max(0.0, tankLoad - heal);
-		final double tankNetEarly = Math.max(0.0, tankLoad + minionLoad - heal); // while the minions are up
-		final double othersNet = Math.max(0.0, othersLoad - Math.max(0.0, heal - tankLoad));
+		final double tankNet = Math.max(0.0, tankLoad - heal - tankPotions);
+		final double tankNetEarly = Math.max(0.0, tankLoad + minionLoad - heal - tankPotions); // while the minions are up
+		final double othersNet = Math.max(0.0, othersLoad - Math.max(0.0, heal - Math.max(0.0, tankLoad - tankPotions)) - othersPotions);
 		final double tankLasts;
 		if (tankNetEarly * clear >= tank.hp())
 		{
@@ -216,6 +246,44 @@ public final class RaidPlanner
 		final double ratio = lasts / kill;
 		final double win = (kill > params.maxFightSeconds()) ? 0.0 : Double.isInfinite(ratio) ? 1.0 : Math.max(0.0, Math.min(1.0, (ratio - 0.6) / 0.8));
 		return new Team(List.copyOf(team), kill, ratio, win);
+	}
+
+	/** @return the seconds the team needs to do this much damage (infinite when it never gets there) */
+	private static double timeFor(double work, List<Member> team, double multiple)
+	{
+		double hi = 1.0;
+		while (done(team, hi, multiple) < work)
+		{
+			hi *= 2.0;
+			if (hi > 1.0e7)
+			{
+				return Double.POSITIVE_INFINITY;
+			}
+		}
+		double lo = 0.0;
+		for (int i = 0; i < 60; i++)
+		{
+			final double mid = (lo + hi) / 2.0;
+			if (done(team, mid, multiple) >= work)
+			{
+				hi = mid;
+			}
+			else
+			{
+				lo = mid;
+			}
+		}
+		return hi;
+	}
+
+	private static double done(List<Member> team, double seconds, double multiple)
+	{
+		double total = 0.0;
+		for (Member member : team)
+		{
+			total += member.damageIn(seconds);
+		}
+		return total * multiple;
 	}
 
 	/**

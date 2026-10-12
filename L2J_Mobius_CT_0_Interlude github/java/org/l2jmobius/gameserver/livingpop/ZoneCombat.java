@@ -668,6 +668,26 @@ public final class ZoneCombat
 		return Math.max(1.0, Math.ceil(fightSeconds / interval)) * table[LivingSupplies.gradeFor(level)];
 	}
 
+	/** @return the shots a member fires a second in a fight: the grade's shots each attack, an attack every hit interval (0 when the model is off) */
+	public double raidShotRate(int classId, int level)
+	{
+		if (!_params.enabled())
+		{
+			return 0.0;
+		}
+		final Role role = roleOf(classId);
+		final boolean mage = role == Role.MAGE;
+		final double interval = mage ? _hitInterval[2] : (role == Role.BOW) ? _hitInterval[1] : _hitInterval[0];
+		final double[] table = mage ? SHOTS_MAGE : (role == Role.BOW) ? SHOTS_BOW : SHOTS_MELEE;
+		return table[LivingSupplies.gradeFor(level)] / interval;
+	}
+
+	/** @return the HP one healing potion gives at the level (the same figure the hunting rest model uses) */
+	public static double raidPotionHeal(int level)
+	{
+		return (level < 20) ? POTION_HEAL_LESSER : POTION_HEAL;
+	}
+
 	/** @return the damage multiple a buffer class gives a melee party at the level (1 for a class that is not a buffer) */
 	public double raidBuff(int classId, int level)
 	{

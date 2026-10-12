@@ -679,6 +679,7 @@ public class LivingPopulationManager
 		_raids = (_raidConfig == null) ? null : new RaidDirector(_random, _raidConfig);
 		_raidBossesLoaded = false;
 		loadRaidTimers();
+		loadRaidStats();
 		_handoff.setTownStock(_townStock);
 		_lastStockSweep = System.currentTimeMillis(); // downtime does not clear stock
 		FakePlayerStoreFactory.setSupply(new TownShops(_townStock, () -> (_catalog == null) ? List.of() : _catalog.towns(), this::payOwner, this::shotFloor));
@@ -793,6 +794,7 @@ public class LivingPopulationManager
 		}
 		saveShotDemand();
 		saveRaidTimers();
+		saveRaidStats();
 		// Clear in-memory state so a later start() reloads cleanly instead of double-loading the population.
 		_bots.clear();
 		_removals.clear();
@@ -1082,6 +1084,10 @@ public class LivingPopulationManager
 		{
 			ensureRaidBosses();
 			_raids.tick(now, _bots, life, new RaidHost(combat));
+			for (String alert : _raids.stats().takeAlerts())
+			{
+				LOGGER.warning("LivingPopulation: raid outlier: " + alert);
+			}
 		}
 
 		// Resolve up to resolveBatch due bots, starting from a rotating cursor so a population larger than the batch is
@@ -1296,13 +1302,13 @@ public class LivingPopulationManager
 	 */
 	private double ratePerMinute(ZoneCombat combat, ColdBot bot, int level, double flat, long huntedMs, ColdEconomy.Params economyParams, Map<String, Integer> occupancy)
 	{
-		final double full = killsPerMinuteOf(combat, bot, level, flat, 1.0);
+		final double full = killsPerMinuteOf(combat, bot, level, flat, 1.0, huntedMs);
 		if (!combat.knows(bot.getZone()))
 		{
 			return full;
 		}
 		final double shots = shotFractionOf(bot, level, full, huntedMs, economyParams);
-		double rate = (shots >= 1.0) ? full : killsPerMinuteOf(combat, bot, level, flat, shots);
+		double rate = (shots >= 1.0) ? full : killsPerMinuteOf(combat, bot, level, flat, shots, huntedMs);
 		if (_respawnLimit && (occupancy != null))
 		{
 			// The zone only supplies so many monsters a minute, and its bots share them.
@@ -1330,7 +1336,22 @@ public class LivingPopulationManager
 		return LivingSupplies.isMystic(bot.getClassId()) ? _travelConfig.spiritshotsPerKill() : economyParams.soulshotsPerKill();
 	}
 
-	private double killsPerMinuteOf(ZoneCombat combat, ColdBot bot, int level, double flat, double shotFraction)
+	/**
+	 * How much of the span the bot's potions cover. A potion stock lasts as long as the bot drinks it, at the rate its hunting gives a use for
+	 * (the same rate it is drunk at), so a bot that runs dry partway through gets the potion help for part of the span only.
+	 */
+	private double potionFractionOf(ZoneCombat combat, ColdBot bot, int level, long huntedMs)
+	{
+		final double perHour = _travelConfig.potionsPerHour() * LivingSupplies.potionUseFactor(bot.getClassId());
+		if (perHour <= 0.0)
+		{
+			return 1.0;
+		}
+		final double needed = combat.potionsPerHour(bot.getZone(), bot.getClassId(), level, ColdLife.statsOf(bot, _gear, combat), 1.0, perHour);
+		return LivingSupplies.coverage(bot.getPotions(), needed, huntedMs / 3_600_000.0);
+	}
+
+	private double killsPerMinuteOf(ZoneCombat combat, ColdBot bot, int level, double flat, double shotFraction, long huntedMs)
 	{
 		if (!combat.knows(bot.getZone()))
 		{
@@ -1342,7 +1363,7 @@ public class LivingPopulationManager
 		{
 			skills = ZoneCombat.skillFraction(skillTree(bot.getClassId()), SkillPlanner.decode(bot.getSkills()), level);
 		}
-		return combat.killsPerMinute(bot.getZone(), bot.getClassId(), level, stats, skills, shotFraction, usesBlessed(bot), (bot.getPotions() > 0) ? (_travelConfig.potionsPerHour() * LivingSupplies.potionUseFactor(bot.getClassId())) : 0.0);
+		return combat.killsPerMinute(bot.getZone(), bot.getClassId(), level, stats, skills, shotFraction, usesBlessed(bot), _travelConfig.potionsPerHour() * LivingSupplies.potionUseFactor(bot.getClassId()) * potionFractionOf(combat, bot, level, huntedMs));
 	}
 
 	/**
@@ -1909,6 +1930,10 @@ public class LivingPopulationManager
 			{
 				saveRaidTimers();
 			}
+			if ((_raids != null) && _raids.stats().dirty())
+			{
+				saveRaidStats();
+			}
 		}
 		catch (Exception e)
 		{
@@ -1963,6 +1988,43 @@ public class LivingPopulationManager
 	private Path raidTimersFile()
 	{
 		return Path.of(_config.snapshotFile()).resolveSibling("LivingPopulation-raids.txt");
+	}
+
+	private Path raidStatsFile()
+	{
+		return Path.of(_config.snapshotFile()).resolveSibling("LivingPopulation-raidstats.txt");
+	}
+
+	private void loadRaidStats()
+	{
+		try
+		{
+			if ((_raids != null) && Files.exists(raidStatsFile()))
+			{
+				_raids.stats().decode(Files.readString(raidStatsFile(), StandardCharsets.UTF_8));
+			}
+		}
+		catch (Exception e)
+		{
+			LOGGER.log(Level.WARNING, "LivingPopulation: could not read the raid stats: " + e.getMessage(), e);
+		}
+	}
+
+	/** Saves how each boss has gone, and writes it as JSON next to the snapshot for the monitor (most out-of-line bosses first). */
+	private void saveRaidStats()
+	{
+		try
+		{
+			if (_raids != null)
+			{
+				Files.write(raidStatsFile(), _raids.stats().encode().getBytes(StandardCharsets.UTF_8));
+				Files.write(raidStatsFile().resolveSibling("LivingPopulation-raidstats.json"), _raids.stats().toJson().getBytes(StandardCharsets.UTF_8));
+			}
+		}
+		catch (Exception e)
+		{
+			LOGGER.log(Level.WARNING, "LivingPopulation: could not save the raid stats: " + e.getMessage(), e);
+		}
 	}
 
 	private void loadRaidTimers()
@@ -2105,9 +2167,17 @@ public class LivingPopulationManager
 			final ZoneCombat.ZoneStats zone = new ZoneCombat.ZoneStats(boss.name(), boss.level(), boss.level(), boss.level(), boss.hp(), boss.pDef(), boss.mDef(), boss.pAtk(), boss.mAtk(), 0.0, 1, 0.0, 0.0, 0.0, boss.atkSpeed(), 0.0, 0.0);
 			final double skills = ZoneCombat.skillFraction(skillTree(bot.getClassId()), SkillPlanner.decode(bot.getSkills()), level);
 			final int seat = ZoneCombat.seatOf(bot.getClassId());
-			final double dps = ((seat == 0) || (seat == 1)) ? _model.raidDps(zone, bot.getClassId(), level, stats, skills, (bot.getSoulshots() > 0L) ? 1.0 : 0.0, usesBlessed(bot)) : 0.0;
+			final boolean fights = (seat == 0) || (seat == 1);
+			// Shots and potions last as long as the stock does at the rate the fight uses them (as in hunting: part of the fight is shot, part is not).
+			final double shotRate = _model.raidShotRate(bot.getClassId(), level);
+			final double shotSeconds = (!bot.isRewardClaimed() || (shotRate <= 0.0)) ? Double.POSITIVE_INFINITY : (Math.max(0L, bot.getSoulshots()) / shotRate);
+			final double potionRate = (_travelConfig.potionsPerHour() * LivingSupplies.potionUseFactor(bot.getClassId())) / 3600.0;
+			final double potionHps = potionRate * ZoneCombat.raidPotionHeal(level);
+			final double potionSeconds = (potionRate <= 0.0) ? 0.0 : (Math.max(0L, bot.getPotions()) / potionRate);
+			final double plain = fights ? _model.raidDps(zone, bot.getClassId(), level, stats, skills, 0.0, usesBlessed(bot)) : 0.0;
+			final double shot = (fights && (shotSeconds > 0.0)) ? _model.raidDps(zone, bot.getClassId(), level, stats, skills, 1.0, usesBlessed(bot)) : plain;
 			final RaidPlanner.Seat role = (seat == 0) ? RaidPlanner.Seat.TANK : (seat == 3) ? RaidPlanner.Seat.HEALER : (seat == 2) ? RaidPlanner.Seat.BUFFER : RaidPlanner.Seat.DAMAGE;
-			return new RaidPlanner.Member(bot.getId(), role, dps, template.getBaseHpMax(level), stats.pDef(), (seat == 3) ? _model.raidHealPerSecond(bot.getClassId(), level, stats.attack()) : 0.0, (seat == 2) ? _model.raidBuff(bot.getClassId(), level) : 1.0);
+			return new RaidPlanner.Member(bot.getId(), role, shot, template.getBaseHpMax(level), stats.pDef(), (seat == 3) ? _model.raidHealPerSecond(bot.getClassId(), level, stats.attack()) : 0.0, (seat == 2) ? _model.raidBuff(bot.getClassId(), level) : 1.0, plain, shotSeconds, potionHps, potionSeconds);
 		}
 
 		@Override

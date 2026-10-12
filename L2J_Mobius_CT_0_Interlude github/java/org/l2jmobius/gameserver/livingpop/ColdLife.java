@@ -685,6 +685,17 @@ public final class ColdLife
 	}
 
 	/**
+	 * A raid party wiped and tries again: the bot dies and loses experience as for any death, but stays with the party (it runs back to the boss).
+	 */
+	static void wipedInRaid(ColdBot bot, String bossName, Context context, List<DecisionLog.Event> events)
+	{
+		final long lost = Math.min(bot.getExpIntoLevel(), Math.round(context.expToNext().applyAsLong(bot.getLevel()) * (ColdRisk.expLossPercent(bot.getLevel()) / 100.0)));
+		bot.setExpIntoLevel(bot.getExpIntoLevel() - lost);
+		bot.setDeaths(bot.getDeaths() + 1);
+		events.add(new DecisionLog.Event(null, "The party wiped on " + bossName + " and it lost " + DecisionLog.num(lost) + " exp. It runs back with the party for another try"));
+	}
+
+	/**
 	 * A member of a raid party died in the fight: the experience a death costs, then it recovers in the town the party came back to.
 	 * @param bot the bot
 	 * @param town the town it recovers in

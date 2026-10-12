@@ -36,6 +36,7 @@ import org.l2jmobius.gameserver.livingpop.DropYield;
 import org.l2jmobius.gameserver.livingpop.MerchantPlanner;
 import org.l2jmobius.gameserver.livingpop.RaidLoot;
 import org.l2jmobius.gameserver.livingpop.RaidPlanner;
+import org.l2jmobius.gameserver.livingpop.RaidStats;
 import org.l2jmobius.gameserver.livingpop.ShotCrafting;
 import org.l2jmobius.gameserver.livingpop.ShotDemand;
 import org.l2jmobius.gameserver.livingpop.TownStock;
@@ -93,6 +94,7 @@ public class LivingTravelTest
 		testShotDemand();
 		testMerchant();
 		testRaids();
+		testRaidStats();
 		testLootSale();
 		testColdRisk();
 		testColdDeathAndRest();
@@ -828,6 +830,33 @@ public class LivingTravelTest
 		check("a boss whose area skills outrun the healing wipes the team", RaidPlanner.fight(new RaidPlanner.Boss(25202, 400_000.0, 2400.0, 0.5, List.of(new RaidPlanner.Strike(60_000.0, 1.0, true))), team.members(), params).winChance() == 0.0);
 		check("a boss with strikes can leave the pool short of a team", RaidPlanner.assemble(new RaidPlanner.Boss(25202, 400_000.0, 2400.0, 0.5, List.of(new RaidPlanner.Strike(60_000.0, 1.0, true))), pool, params) == null);
 		check("a lower win chance lets the same pool go for it", RaidPlanner.assemble(new RaidPlanner.Boss(25202, 400_000.0, 2400.0, 0.5, List.of(new RaidPlanner.Strike(1500.0, 4.0, false))), pool, new RaidPlanner.Params(params.minSize(), params.maxSize(), 0.0, params.hitScale(), params.burst(), params.buffCap(), params.healSeconds(), params.maxFightSeconds(), params.skillSeconds())) != null);
+		// Shots and potions last as long as the stock: a member with a few shots does its shot damage for a moment, a tank with a few potions heals itself for a moment.
+		final List<RaidPlanner.Member> dry = new ArrayList<>();
+		for (RaidPlanner.Member m : team.members())
+		{
+			dry.add((m.seat() == RaidPlanner.Seat.DAMAGE) ? new RaidPlanner.Member(m.id(), m.seat(), m.dps(), m.hp(), m.pDef(), m.healPerSecond(), m.buff(), m.dps() * 0.5, 5.0, 0.0, 0.0) : m);
+		}
+		check("damage dealers whose shots run out take longer to kill the boss", RaidPlanner.fight(boss, dry, params).killSeconds() > base.killSeconds());
+		final List<RaidPlanner.Member> halfShot = new ArrayList<>();
+		for (RaidPlanner.Member m : team.members())
+		{
+			halfShot.add((m.seat() == RaidPlanner.Seat.DAMAGE) ? new RaidPlanner.Member(m.id(), m.seat(), m.dps(), m.hp(), m.pDef(), m.healPerSecond(), m.buff(), m.dps() * 0.5, base.killSeconds() / 2.0, 0.0, 0.0) : m);
+		}
+		final double mid = RaidPlanner.fight(boss, halfShot, params).killSeconds();
+		check("shots that last half the fight give half the bonus (between the two extremes)", (mid > base.killSeconds()) && (mid < RaidPlanner.fight(boss, dry, params).killSeconds()));
+		final RaidPlanner.Boss heavy = new RaidPlanner.Boss(25202, 400_000.0, 2400.0, 0.5, List.of(new RaidPlanner.Strike(1500.0, 6.0, false)));
+		final List<RaidPlanner.Member> potionTeam = new ArrayList<>();
+		final List<RaidPlanner.Member> fewPotions = new ArrayList<>();
+		for (RaidPlanner.Member m : team.members())
+		{
+			final boolean tank = m.seat() == RaidPlanner.Seat.TANK;
+			potionTeam.add(tank ? new RaidPlanner.Member(m.id(), m.seat(), m.dps(), m.hp(), m.pDef(), m.healPerSecond(), m.buff(), m.plainDps(), m.shotSeconds(), 400.0, 1.0e9) : m);
+			fewPotions.add(tank ? new RaidPlanner.Member(m.id(), m.seat(), m.dps(), m.hp(), m.pDef(), m.healPerSecond(), m.buff(), m.plainDps(), m.shotSeconds(), 400.0, 5.0) : m);
+		}
+		final double none = RaidPlanner.fight(heavy, team.members(), params).ratio();
+		check("potions help the tank while they last", RaidPlanner.fight(heavy, potionTeam, params).ratio() > none);
+		check("a tank with a few potions gets only a little of that", RaidPlanner.fight(heavy, fewPotions, params).ratio() < RaidPlanner.fight(heavy, potionTeam, params).ratio());
+		check("coverage is the share of the span the stock lasts", (LivingSupplies.coverage(30, 60.0, 1.0) == 0.5) && (LivingSupplies.coverage(500, 60.0, 1.0) == 1.0) && (LivingSupplies.coverage(0, 60.0, 1.0) == 0.0) && (LivingSupplies.coverage(0, 0.0, 1.0) == 1.0) && (LivingSupplies.coverage(1, 60.0, 0.0) == 1.0) && (LivingSupplies.coverage(0, 60.0, 0.0) == 0.0));
 		// Loot: the groups roll, and the items are shared evenly.
 		final java.util.Random random = new java.util.Random(7);
 		final List<RaidLoot.Group> groups = List.of(new RaidLoot.Group(100.0, List.of(new RaidLoot.Entry(57, 100.0, 1000L, 1000L))), new RaidLoot.Group(100.0, List.of(new RaidLoot.Entry(81, 50.0, 1L, 1L), new RaidLoot.Entry(2500, 50.0, 1L, 1L))), new RaidLoot.Group(0.0, List.of(new RaidLoot.Entry(151, 100.0, 1L, 1L))));
@@ -854,6 +883,48 @@ public class LivingTravelTest
 		check("nothing is lost when the loot is shared", (adena == 1003L) && (total == 1003L + 300L + 500L));
 		check("the shares are as even as whole items allow", (high - low) <= 301L);
 		check("every member gets an item", shares.stream().allMatch(s -> s.stream().anyMatch(d -> d.itemId() != 57)));
+	}
+
+	private static void testRaidStats()
+	{
+		final RaidStats stats = new RaidStats(20);
+		for (int i = 0; i < 20; i++)
+		{
+			stats.record(25001, "Greyclaw Kutus", 23, 0.8, false, 6, 300.0, 1.2);
+		}
+		final RaidStats.Line deadly = stats.line(25001);
+		check("it counts the fights, wins and the wins expected", (deadly.attempts() == 20) && (deadly.wins() == 0) && (Math.abs(deadly.expectedWins() - 16.0) < 1e-9));
+		check("20 losses at an 80% chance is an outlier, deadlier than modeled", (deadly.z() < -RaidStats.OUTLIER_Z) && (deadly.flag() != null) && deadly.flag().startsWith("Deadlier"));
+		check("it raises one alert for it", stats.takeAlerts().size() == 1);
+		stats.record(25001, "Greyclaw Kutus", 23, 0.8, false, 6, 300.0, 1.2);
+		check("and does not repeat the alert while it stays an outlier", stats.takeAlerts().isEmpty());
+		final RaidStats fair = new RaidStats(20);
+		for (int i = 0; i < 20; i++)
+		{
+			fair.record(25002, "Fair", 30, 0.8, i % 5 != 0, 7, 400.0, 1.0); // 16 wins in 20, as predicted
+		}
+		check("results as predicted are not flagged", (fair.line(25002).flag() == null) && fair.takeAlerts().isEmpty());
+		final RaidStats few = new RaidStats(20);
+		for (int i = 0; i < 4; i++)
+		{
+			few.record(25003, "Few", 30, 0.8, false, 7, 400.0, 1.0);
+		}
+		check("a few fights are not enough to call an outlier", few.line(25003).flag() == null);
+		final RaidStats easy = new RaidStats(20);
+		for (int i = 0; i < 20; i++)
+		{
+			easy.record(25004, "Easy", 30, 0.3, true, 7, 400.0, 1.0);
+		}
+		check("wins where the model said they would lose is an easier boss than modeled", (easy.line(25004).flag() != null) && easy.line(25004).flag().startsWith("Easier"));
+		check("only the latest fights count: the window slides", (stats.line(25001).recentAttempts() == 20) && (stats.line(25001).attempts() == 21));
+		check("the most out of line boss comes first", stats.lines().get(0).id() == 25001);
+		final RaidStats copy = new RaidStats(20);
+		copy.decode(stats.encode());
+		check("the figures read back from their text", (copy.line(25001) != null) && (copy.line(25001).attempts() == 21) && (copy.line(25001).recentAttempts() == 20) && (copy.line(25001).flag() != null) && "Greyclaw Kutus".equals(copy.line(25001).name()));
+		check("a boss that was already an outlier before a restart does not alert again", copy.takeAlerts().isEmpty() && copy.line(25001).flag() != null);
+		copy.decode("junk\n25009|Bad|x");
+		check("garbage reads as nothing", copy.lines().isEmpty());
+		check("the JSON lists the bosses and their flags", stats.toJson().contains("\"id\":25001") && stats.toJson().contains("\"flag\":\"Deadlier"));
 	}
 
 	private static List<RaidPlanner.Member> noBuffer(List<RaidPlanner.Member> pool)

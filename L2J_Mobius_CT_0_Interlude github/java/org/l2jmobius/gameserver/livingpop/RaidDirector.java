@@ -38,8 +38,8 @@ import org.l2jmobius.gameserver.livingpop.ZoneCatalog.Town;
  */
 public final class RaidDirector
 {
-	/** Tuning, from the module settings. {@code sync}: the world's own boss is the one that is killed (see {@link Host#open}), else the director keeps a respawn clock of its own. {@code excluded}: boss ids parties leave alone. */
-	public record Config(int minLevel, int maxLevel, int levelsBelow, int levelsAbove, long checkMs, long gatherMs, long retryMs, RaidPlanner.Params planner, boolean sync, Set<Integer> excluded)
+	/** Tuning, from the module settings. {@code sync}: the world's own boss is the one that is killed (see {@link Host#open}), else the director keeps a respawn clock of its own. {@code excluded}: boss ids parties leave alone. {@code retries}: how many times a party that wiped goes again with the same members before it is disbanded; {@code cooldownMs}: how long each member of a disbanded party stays out of every raid party. */
+	public record Config(int minLevel, int maxLevel, int levelsBelow, int levelsAbove, long checkMs, long gatherMs, long cooldownMs, int retries, RaidPlanner.Params planner, boolean sync, Set<Integer> excluded)
 	{
 	}
 
@@ -78,15 +78,17 @@ public final class RaidDirector
 
 	private static final double[] PARTY_EXP = { 1.0, 1.10, 1.20, 1.30, 1.40, 1.50, 2.0, 2.10, 2.20 };
 
-	private record Raid(BossInfo boss, List<ColdBot> members, RaidPlanner.Team team, long endAt, String town)
+	private record Raid(BossInfo boss, List<ColdBot> members, RaidPlanner.Team team, long endAt, String town, int attempt)
 	{
 	}
 
 	private final Random _random;
 	private final Config _config;
 	private final Map<Integer, Long> _respawnAt = new HashMap<>(); // boss -> when it is up again (0 = up)
-	private final Map<Integer, Long> _retryAt = new HashMap<>(); // boss -> not before (after a wipe)
+	private final Map<Integer, Long> _retryAt = new HashMap<>(); // boss -> not before (after a party found it gone)
+	private final Map<Long, Long> _cooldownUntil = new HashMap<>(); // bot -> not in a raid party before (after a disbanded party)
 	private final List<Raid> _raids = new ArrayList<>();
+	private final RaidStats _stats = new RaidStats(20); // how each boss has gone, against what the model said
 	private List<BossInfo> _bosses = List.of();
 	private long _nextCheck;
 	private volatile boolean _dirty;
@@ -101,6 +103,12 @@ public final class RaidDirector
 	public synchronized void setBosses(List<BossInfo> bosses)
 	{
 		_bosses = List.copyOf(bosses);
+	}
+
+	/** @return the record of how the raid fights have gone (see {@link RaidStats}) */
+	public RaidStats stats()
+	{
+		return _stats;
 	}
 
 	public synchronized int bossCount()
@@ -162,6 +170,7 @@ public final class RaidDirector
 			return;
 		}
 		_nextCheck = now + _config.checkMs();
+		_cooldownUntil.values().removeIf(until -> until <= now);
 		final Set<Long> taken = new HashSet<>();
 		for (Raid raid : _raids)
 		{
@@ -182,7 +191,7 @@ public final class RaidDirector
 			final List<RaidPlanner.Member> candidates = new ArrayList<>();
 			for (ColdBot bot : bots)
 			{
-				if (taken.contains(bot.getId()) || bot.isHotLock() || (bot.getLevel() < (boss.level() - _config.levelsBelow())) || (bot.getLevel() > (boss.level() + _config.levelsAbove())))
+				if (taken.contains(bot.getId()) || (_cooldownUntil.getOrDefault(bot.getId(), 0L) > now) || bot.isHotLock() || (bot.getLevel() < (boss.level() - _config.levelsBelow())) || (bot.getLevel() > (boss.level() + _config.levelsAbove())))
 				{
 					continue;
 				}
@@ -209,8 +218,7 @@ public final class RaidDirector
 		{
 			return;
 		}
-		final long travelMs = Math.round(Math.hypot(boss.at().x() - town.arrival().x(), boss.at().y() - town.arrival().y()) * 1.4 / 130.0 * 1000.0);
-		final long endAt = now + _config.gatherMs() + travelMs + (long) Math.min(team.killSeconds() * 1000.0, 3_600_000.0);
+		final long endAt = now + _config.gatherMs() + travelMs(boss, town) + fightMs(team);
 		final List<ColdBot> members = new ArrayList<>();
 		for (RaidPlanner.Member member : team.members())
 		{
@@ -231,7 +239,7 @@ public final class RaidDirector
 			members.add(bot);
 			taken.add(bot.getId());
 		}
-		_raids.add(new Raid(boss, members, team, endAt, town.name()));
+		_raids.add(new Raid(boss, members, team, endAt, town.name(), 1));
 		for (ColdBot bot : members)
 		{
 			bot.setUpdatedAt(now);
@@ -239,11 +247,55 @@ public final class RaidDirector
 		}
 	}
 
+	private static long travelMs(BossInfo boss, Town town)
+	{
+		return Math.round(Math.hypot(boss.at().x() - town.arrival().x(), boss.at().y() - town.arrival().y()) * 1.4 / 130.0 * 1000.0);
+	}
+
+	private static long fightMs(RaidPlanner.Team team)
+	{
+		return (long) Math.min(team.killSeconds() * 1000.0, 3_600_000.0);
+	}
+
+	/** The party wiped: its members pay for the death and try again together, after getting back on their feet and to the boss. */
+	private void retry(Raid raid, double fightSeconds, long now, ColdLife.Context life, Host host)
+	{
+		final BossInfo boss = raid.boss();
+		final Town town = life.catalog().town(raid.town());
+		_stats.record(boss.id(), boss.name(), boss.level(), raid.team().winChance(), false, raid.members().size(), raid.team().killSeconds(), raid.team().ratio());
+		final long backMs = life.risk().recoverMs() + _config.gatherMs() + ((town == null) ? 0L : travelMs(boss, town)) + fightMs(raid.team());
+		for (ColdBot bot : raid.members())
+		{
+			synchronized (bot)
+			{
+				final List<DecisionLog.Event> events = new ArrayList<>();
+				host.supplies(bot, fightSeconds, events);
+				ColdLife.wipedInRaid(bot, boss.name(), life, events);
+				bot.setLeg(TravelLeg.stay(boss.at(), now, backMs));
+				bot.getDecisions().addTick(now, events);
+				bot.setUpdatedAt(now);
+				host.save(bot);
+			}
+		}
+		_raids.add(new Raid(boss, raid.members(), raid.team(), now + backMs, raid.town(), raid.attempt() + 1));
+	}
+
 	private void finish(Raid raid, long now, ColdLife.Context life, Host host)
 	{
 		final BossInfo boss = raid.boss();
 		final boolean gone = _config.sync() && !host.open(boss); // killed by a player meanwhile, or a player is at it: the party turns back
 		final boolean won = !gone && (_random.nextDouble() < raid.team().winChance());
+		// A party that found the boss gone never fought; one that won fought the whole modeled fight; one that wiped fought until its tank fell.
+		final double fightSeconds = gone ? 0.0 : won ? Math.min(raid.team().killSeconds(), 3600.0) : (Math.min(raid.team().killSeconds(), 3600.0) * Math.max(0.1, Math.min(1.0, raid.team().ratio())));
+		if (!won && !gone && (raid.attempt() <= _config.retries()))
+		{
+			retry(raid, fightSeconds, now, life, host);
+			return;
+		}
+		if (!gone)
+		{
+			_stats.record(boss.id(), boss.name(), boss.level(), raid.team().winChance(), won, raid.members().size(), raid.team().killSeconds(), raid.team().ratio());
+		}
 		final Town town = life.catalog().town(raid.town());
 		final List<DecisionLog.Event> shared = new ArrayList<>();
 		final int size = raid.members().size();
@@ -264,13 +316,21 @@ public final class RaidDirector
 		}
 		else
 		{
-			_retryAt.put(boss.id(), now + (gone ? _config.checkMs() : _config.retryMs()));
+			if (gone)
+			{
+				_retryAt.put(boss.id(), now + _config.checkMs());
+			}
+			else
+			{
+				for (ColdBot member : raid.members())
+				{
+					_cooldownUntil.put(member.getId(), now + _config.cooldownMs()); // the party is disbanded: no raid party for any of them for a while
+				}
+			}
 		}
 		final double deathChance = won ? Math.max(0.03, Math.min(0.4, 0.35 * (1.6 - raid.team().ratio()))) : (gone ? 0.0 : 1.0);
 		final double expEach = won ? (boss.exp() * Math.max(0.01, org.l2jmobius.gameserver.config.RatesConfig.RATE_XP) * PARTY_EXP[Math.min(size, PARTY_EXP.length) - 1] / size) : 0.0;
 		final double spEach = won ? (boss.sp() * Math.max(0.01, org.l2jmobius.gameserver.config.RatesConfig.RATE_SP) * PARTY_EXP[Math.min(size, PARTY_EXP.length) - 1] / size) : 0.0;
-		// A party that found the boss gone never fought; one that won fought the whole modeled fight; one that wiped fought until its tank fell.
-		final double fightSeconds = gone ? 0.0 : won ? Math.min(raid.team().killSeconds(), 3600.0) : (Math.min(raid.team().killSeconds(), 3600.0) * Math.max(0.1, Math.min(1.0, raid.team().ratio())));
 		for (int i = 0; i < size; i++)
 		{
 			final ColdBot bot = raid.members().get(i);
@@ -306,7 +366,7 @@ public final class RaidDirector
 				}
 				else
 				{
-					events.add(new DecisionLog.Event(null, gone ? ("Found " + boss.name() + " already gone or busy. The party turns back") : ("The party wiped on " + boss.name())));
+					events.add(new DecisionLog.Event(null, gone ? ("Found " + boss.name() + " already gone or busy. The party turns back") : ("The party wiped on " + boss.name() + ((raid.attempt() > 1) ? " again" : "") + " and is disbanded. It stays out of raid parties for " + (_config.cooldownMs() / 60_000L) + " minutes")));
 				}
 				if ((town != null) && (_random.nextDouble() < deathChance))
 				{

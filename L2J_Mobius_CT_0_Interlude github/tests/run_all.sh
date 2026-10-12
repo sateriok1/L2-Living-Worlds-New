@@ -90,6 +90,7 @@ PROD_SOURCES=(
 	"java/org/l2jmobius/gameserver/livingpop/MerchantPlanner.java"
 	"java/org/l2jmobius/gameserver/livingpop/RaidLoot.java"
 	"java/org/l2jmobius/gameserver/livingpop/RaidPlanner.java"
+	"java/org/l2jmobius/gameserver/livingpop/RaidStats.java"
 	"java/org/l2jmobius/gameserver/livingpop/ColdRisk.java"
 	"java/org/l2jmobius/gameserver/livingpop/ClassPath.java"
 	"java/org/l2jmobius/gameserver/livingpop/SkillPlanner.java"
