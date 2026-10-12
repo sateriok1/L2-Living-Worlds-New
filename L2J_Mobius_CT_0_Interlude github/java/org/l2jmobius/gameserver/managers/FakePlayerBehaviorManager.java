@@ -636,6 +636,7 @@ public class FakePlayerBehaviorManager implements IXmlReader
 		final int groundZ = GeoEngine.getInstance().getHeight(where.getX(), where.getY(), where.getZ());
 		final FakePlayerAppearance look = FakePlayerAppearanceFactory.generate(20, 40, Race.DWARF, true);
 		look.setName(name);
+		look.setTitle("Adena Whore");
 		look.setStoreItems(stock);
 		look.setStore(PrivateStoreType.SELL.getId(), FakePlayerStoreFactory.title("SELL", stock));
 		final Npc npc = placeBot(new Location(where.getX(), where.getY(), groundZ), Rnd.get(65536), look, null);
