@@ -314,6 +314,18 @@ public final class ColdLife
 		{
 		}
 
+		/** @return the hunter (cold row) with this id, or null */
+		default ColdBot gearBot(long botId)
+		{
+			return null;
+		}
+
+		/** @return the adena the hunter holds right now (its live character's when it is hot), or -1 when unknown */
+		default long gearFunds(long botId)
+		{
+			return -1L;
+		}
+
 		/** Drops a hunter's wish (an order she is crafting or has ready stays). */
 		default void gearClear(long botId)
 		{
@@ -587,6 +599,7 @@ public final class ColdLife
 		}
 
 		final Town town = townFor(bot, zone, catalog);
+		refreshWish(bot, town, now, context);
 		progressClassQuest(bot, now, context, events);
 		String betterZone = null;
 		if (town != null)
@@ -1184,13 +1197,35 @@ public final class ColdLife
 	{
 		final Workshop shop = context.workshop();
 		final GearCrafting.Params params = shop.gearParams();
-		if ((params == null) || (shop.gearCrafting() != null))
+		if (params == null)
 		{
-			return false; // gear off, or she is already at a craft
+			return false;
+		}
+		final GearOrders.Order active = shop.gearCrafting();
+		if (active != null)
+		{
+			// An order of hers is in the book as crafting but she is idle (a restart or a lost trip): the materials are bought, so she takes the craft up where it stood.
+			resumeGearCraft(bot, active, now, context, events);
+			return true;
 		}
 		final Random random = context.random();
+		// Her own leveling comes first: what the next lessons cost (books) stays out of what she lays out on a craft.
+		final SkillPlanner.Lesson lesson = previewLesson(bot, trainingBudget(bot, purse(bot), context), context);
+		final long levelFund = (lesson == null) ? 0L : Math.max(0L, lesson.adena());
 		for (GearOrders.Order wish : shop.gearWishes())
 		{
+			// The hunter's means are read again now: with too little it is skipped and she moves on to the next in line.
+			final ColdBot wisher = shop.gearBot(wish.botId());
+			final long funds = shop.gearFunds(wish.botId());
+			if ((wisher == null) || (funds < 0L))
+			{
+				continue;
+			}
+			final long budget = upgradeBudget(wisher, funds, context);
+			if (budget <= 0L)
+			{
+				continue;
+			}
 			GearCrafting.Recipe recipe = null;
 			for (GearCrafting.Recipe candidate : shop.gearRecipes())
 			{
@@ -1207,14 +1242,14 @@ public final class ColdLife
 				continue;
 			}
 			final double surchargeShare = GearCrafting.SURCHARGE_MIN + (random.nextDouble() * (GearCrafting.SURCHARGE_MAX - GearCrafting.SURCHARGE_MIN));
-			final GearCrafting.Quote quote = GearCrafting.quote(recipe, bot.getLevel(), bot.getGearRecipes(), market, wish.budget(), surchargeShare);
+			final GearCrafting.Quote quote = GearCrafting.quote(recipe, bot.getLevel(), bot.getGearRecipes(), market, budget, surchargeShare);
 			if (quote == null)
 			{
 				continue; // not craftable now, or more than the hunter can pay
 			}
 			// She lays out only what she can afford; the hunter advances the rest, if it can.
-			final long advance = Math.max(0L, quote.outlay() - Math.max(0L, bot.getAdena() - reserve));
-			if ((advance > 0L) && ((advance > quote.price()) || (advance > wish.budget())))
+			final long advance = Math.max(0L, quote.outlay() - Math.max(0L, bot.getAdena() - reserve - levelFund));
+			if ((advance > 0L) && ((advance > quote.price()) || (advance > budget)))
 			{
 				continue;
 			}
@@ -1235,6 +1270,21 @@ public final class ColdLife
 			return true;
 		}
 		return false;
+	}
+
+	/** She takes up a craft whose materials are bought, for what is left of its time (after a restart, say). */
+	private static void resumeGearCraft(ColdBot bot, GearOrders.Order order, long now, Context context, List<DecisionLog.Event> events)
+	{
+		final Town where = (order.town() == null) ? null : context.catalog().town(order.town());
+		if (where != null)
+		{
+			moveTo(bot, where.arrival());
+			bot.setTown(where.name());
+		}
+		final long left = Math.max(60_000L, order.craftMs() - Math.max(0L, now - order.at()));
+		bot.setActivity(GEAR_CRAFT);
+		bot.setLeg(TravelLeg.stay(point(bot), now, left));
+		events.add(new DecisionLog.Event(null, "Took up the craft of item " + order.productId() + " again (about " + minutes(left) + " left)"));
 	}
 
 	/** The buying trip is over: she is in the last town and starts the craft, which takes her a while. */
@@ -1808,7 +1858,7 @@ public final class ColdLife
 		final LivingGear.Fit fit = fitOf(shop, bot.getClassId(), bot.getId(), bot.getLevel());
 		final Workshop made = context.workshop();
 		final GearOrders.Order order = ((made == null) || (made.gearParams() == null) || isMerchant(bot)) ? null : made.gearOrder(bot.getId());
-		if ((order != null) && (order.state() == GearOrders.State.READY) && (order.due() <= upgradeBudget(bot, purse(bot), context)))
+		if ((order != null) && (order.state() == GearOrders.State.READY) && (order.due() <= rawUpgradeBudget(bot, purse(bot), context)))
 		{
 			final LivingGear.Piece piece = shop.items().piece(order.productId());
 			return new String[]
@@ -1888,6 +1938,33 @@ public final class ColdLife
 	 * What a hunter still wishes for after its shopping goes in the book of orders, with what it can spend on it now. The
 	 * Merchant only keeps the wishes she can craft; a hunter whose order is already being crafted or is ready keeps it.
 	 */
+	/** How often a hunting bot looks at the shops of its town for a piece it would wish for (it does not wait for its next visit). */
+	public static final long GEAR_WISH_REFRESH_MS = 20 * 60_000L;
+	private static final Map<Long, Long> WISH_CHECKED = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/** A hunter on its hunt posts its wish for a piece of gear from its town's shops, so the Merchant hears of it sooner than at its next visit. */
+	private static void refreshWish(ColdBot bot, Town town, long now, Context context)
+	{
+		final GearShop shop = context.gear();
+		final Workshop workshop = context.workshop();
+		if ((shop == null) || (workshop == null) || (workshop.gearParams() == null) || (town == null) || isMerchant(bot))
+		{
+			return;
+		}
+		final GearOrders.Order order = workshop.gearOrder(bot.getId());
+		if ((order != null) && (order.state() != GearOrders.State.WISH))
+		{
+			return; // its piece is on the way
+		}
+		final Long last = WISH_CHECKED.get(bot.getId());
+		if ((last != null) && ((now - last) < GEAR_WISH_REFRESH_MS))
+		{
+			return;
+		}
+		WISH_CHECKED.put(bot.getId(), now);
+		wishFor(bot, town, context, gearOf(bot), fitOf(shop, bot.getClassId(), bot.getId(), bot.getLevel()), now);
+	}
+
 	private static void wishFor(ColdBot bot, Town town, Context context, Map<LivingGear.Slot, Integer> gear, LivingGear.Fit fit, long now)
 	{
 		final Workshop workshop = context.workshop();
@@ -1929,7 +2006,7 @@ public final class ColdLife
 			return false;
 		}
 		final long fee = freeTeleport(bot, context) ? 0L : listed;
-		if ((upgradeBudget(bot, bot.getAdena(), context) - fee) < order.due())
+		if ((rawUpgradeBudget(bot, bot.getAdena(), context) - fee) < order.due())
 		{
 			return false;
 		}
@@ -1973,7 +2050,10 @@ public final class ColdLife
 		for (int pass = 0; pass < GEAR_SHOP_PASSES; pass++)
 		{
 			final long cash = Math.min(ColdEconomy.MAX_ADENA, adena + sold);
-			final long budget = upgradeBudget(bot, cash, context);
+			// In the town where its piece waits, its own money for the piece is free to spend; anywhere else it stays spoken for.
+			final GearOrders.Order mine = (workshop == null) ? null : workshop.gearOrder(bot.getId());
+			final boolean paying = (mine != null) && (mine.state() == GearOrders.State.READY) && town.name().equals(mine.town());
+			final long budget = paying ? rawUpgradeBudget(bot, cash, context) : upgradeBudget(bot, cash, context);
 			final List<LivingGear.Offer> offers = withCrafted(offersIn(shop, town), bot, workshop, town, shop);
 			final List<LivingGear.Change> bought = LivingGear.shop(gear, fit, bot.getLevel(), budget, offers, shop.items(), locked);
 			if (bought.isEmpty())
@@ -2237,6 +2317,23 @@ public final class ColdLife
 	 *         trader first: she also keeps her working capital for crafting and shots, and spends only a share of what is above that
 	 */
 	private static long upgradeBudget(ColdBot bot, long adena, Context context)
+	{
+		long budget = rawUpgradeBudget(bot, adena, context);
+		// What a hunter owes the Merchant for an order she is crafting or has ready is spoken for: it cannot spend it on anything else.
+		final Workshop workshop = context.workshop();
+		if ((workshop != null) && (workshop.gearParams() != null) && !isMerchant(bot))
+		{
+			final GearOrders.Order order = workshop.gearOrder(bot.getId());
+			if ((order != null) && (order.state() != GearOrders.State.WISH))
+			{
+				budget = Math.max(0L, budget - order.due());
+			}
+		}
+		return budget;
+	}
+
+	/** @return {@link #upgradeBudget} before the part spoken for by a gear order is taken out (what the order itself is paid from) */
+	private static long rawUpgradeBudget(ColdBot bot, long adena, Context context)
 	{
 		final long budget = SupplyPlanner.spendable(adena, SupplyPlanner.reserve(bot.getLevel(), adena, supplyFor(bot, context)));
 		final Workshop shop = context.workshop();

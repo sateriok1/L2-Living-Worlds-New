@@ -1474,6 +1474,17 @@ public class HotColdHandoff
 	}
 
 	/**
+	 * @param id a bot id
+	 * @return the adena of the bot's live character, or -1 when it has none (read its row instead)
+	 */
+	public long hotAdena(long id)
+	{
+		final HotEntry entry = _hot.get(id);
+		final Player player = (entry == null) ? null : entry._player;
+		return (player == null) ? -1L : player.getAdena();
+	}
+
+	/**
 	 * Takes adena from a bot's live character.
 	 * @param id the bot's id
 	 * @param adena the adena

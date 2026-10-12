@@ -555,6 +555,31 @@ public class LivingPopulationManager
 		}
 
 		@Override
+		public ColdBot gearBot(long botId)
+		{
+			for (ColdBot bot : _bots)
+			{
+				if (bot.getId() == botId)
+				{
+					return bot;
+				}
+			}
+			return null;
+		}
+
+		@Override
+		public long gearFunds(long botId)
+		{
+			final long hot = _handoff.hotAdena(botId);
+			if (hot >= 0L)
+			{
+				return hot;
+			}
+			final ColdBot bot = gearBot(botId);
+			return (bot == null) ? -1L : bot.getAdena();
+		}
+
+		@Override
 		public void gearClear(long botId)
 		{
 			_gearOrders.clearWish(botId);
@@ -688,6 +713,14 @@ public class LivingPopulationManager
 				payOwner(taken.get(i).owner(), shares.get(i));
 			}
 			_gearOrders.remove(botId);
+			// The pieces of the craft beyond the ones other orders hold are excess once this trade is done: Sateya sells them to a vendor at half their reference price.
+			final long spare = _townStock.count(town, productId) - _gearOrders.ready(productId);
+			final ColdBot merchant = merchantBot();
+			if ((spare > 0L) && (merchant != null) && (_townStock.take(town, productId, spare) != null))
+			{
+				final ItemTemplate item = ItemData.getInstance().getTemplate(productId);
+				payOwner(merchant.getId(), spare * ((item == null) ? 0L : Math.max(0L, item.getReferencePrice() / 2L)));
+			}
 			return true;
 		}
 
@@ -839,9 +872,10 @@ public class LivingPopulationManager
 	/** Takes adena from a bot, whether it has a live character or is on its row. @return false when it does not have that much */
 	private boolean chargeBot(long id, long adena)
 	{
-		if (_handoff.chargeHot(id, adena))
+		final long held = _handoff.hotAdena(id);
+		if (held >= 0L)
 		{
-			return true;
+			return (held >= adena) && _handoff.chargeHot(id, adena); // a live character is charged only what it holds
 		}
 		for (ColdBot bot : _bots)
 		{
