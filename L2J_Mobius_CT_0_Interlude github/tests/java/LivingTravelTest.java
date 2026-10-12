@@ -1376,6 +1376,19 @@ public class LivingTravelTest
 		final ColdBot done = bot(25, "Near Woods", 20_000L, 10L, 2L, 5000);
 		done.setClassId(ClassPath.next(18, done.getId()));
 		check("a bot due its class change is not eligible for raids", ColdLife.classChangePending(due, classes) && ColdLife.classChangePending(questing, classes));
+		// A bot picked for a raid stocks up first, but buys no gear.
+		final ColdBot raider = bot(40, "Near Woods", 50_000L, 0L, 2L, 0);
+		raider.setSoulshots(0L);
+		raider.setLoot(1_000L);
+		final int tier = raider.getGearTier();
+		final List<DecisionLog.Event> raidLog = new ArrayList<>();
+		ColdLife.prepareForRaid(raider, context(0), raidLog);
+		check("a bot picked for a raid sells its loot and buys potions and shots first", (raider.getLoot() == 0L) && (raider.getPotions() > 0L) && (raider.getSoulshots() > 0L) && raidLog.stream().anyMatch(e -> e.text().startsWith("Stopped at the grocer in Alpha to stock up for the raid")));
+		check("but no gear", raider.getGearTier() == tier);
+		final ColdBot stocked = bot(40, "Near Woods", 50_000L, 15L, 2L, 0);
+		final List<DecisionLog.Event> stockedLog = new ArrayList<>();
+		ColdLife.prepareForRaid(stocked, context(0), stockedLog);
+		check("one that is stocked already buys nothing", stockedLog.isEmpty() && (stocked.getAdena() == 50_000L));
 		check("one before its level, or past its class change, is", !ColdLife.classChangePending(early, classes) && !ColdLife.classChangePending(done, classes) && !ColdLife.classChangePending(due, context(0)));
 	}
 
