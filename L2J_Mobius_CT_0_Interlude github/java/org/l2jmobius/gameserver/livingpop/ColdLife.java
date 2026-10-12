@@ -338,6 +338,12 @@ public final class ColdLife
 			return false;
 		}
 
+		/** @return the fewest crafts that are worth the trip to Devil's Isle; a smaller batch is crafted on the spot and delivered */
+		default long isleMinCrafts()
+		{
+			return 0L;
+		}
+
 		/** @return the adena she keeps for crafting and shots before she spends any on her own upgrades */
 		default long workingCapital()
 		{
@@ -1102,11 +1108,9 @@ public final class ColdLife
 
 		final Zone isle = context.catalog().zone(CRAFT_ZONE);
 		final ZoneCatalog.Teleport way = (isle == null) ? null : isle.teleportFrom(MATERIALS_TOWN);
-		if ((way == null) || (bot.getEscapes() < SupplyPlanner.MIN_ESCAPES))
-		{
-			return false; // no way to the isle, or no scroll to leave it
-		}
-		final long fee = freeTeleport(bot, context) ? 0L : way.fee();
+		// Without a way to the isle or a scroll to leave it, only a small batch (crafted on the spot) is possible.
+		final boolean canIsle = (way != null) && (bot.getEscapes() >= SupplyPlanner.MIN_ESCAPES);
+		final long fee = (!canIsle || freeTeleport(bot, context)) ? 0L : way.fee();
 		final Map<Integer, Long> held = new HashMap<>();
 		for (ShotCrafting.Recipe recipe : ShotCrafting.RECIPES)
 		{
@@ -1115,7 +1119,16 @@ public final class ColdLife
 		final MerchantPlanner.Plan plan = MerchantPlanner.decide(bot.getRecipes(), bot.getLevel(), wanted, held, shop.hoursOfStock(), shop.maxCrafts(), bot.getAdena() - reserve - fee, shop.prices());
 		if (plan == null)
 		{
-			return gearTrip(bot, town, now, context, events, reserve, fee, way);
+			return gearTrip(bot, town, now, context, events, reserve, fee, canIsle ? way : null);
+		}
+		if (plan.crafts() < shop.isleMinCrafts())
+		{
+			bot.setAdena(bot.getAdena() - plan.cost());
+			return craftInTown(bot, town, now, context, events, plan.recipe().shotItemId(), plan.shots(), plan.recipe().saleTown(), "shots", plan.cost());
+		}
+		if (!canIsle)
+		{
+			return false;
 		}
 		if (!MATERIALS_TOWN.equals(town.name()))
 		{
@@ -1160,7 +1173,12 @@ public final class ColdLife
 		{
 			return false;
 		}
-		if (!MATERIALS_TOWN.equals(town.name()))
+		final boolean small = (plan.crafts() < shop.isleMinCrafts()) || (way == null);
+		if (small && (plan.crafts() >= shop.isleMinCrafts()))
+		{
+			return false; // a big batch but no way to the isle
+		}
+		if (!small && !MATERIALS_TOWN.equals(town.name()))
 		{
 			return hop(bot, town, MATERIALS_TOWN, "the materials for " + DecisionLog.num(plan.pieces()) + " pieces of gear", now, context, events);
 		}
@@ -1168,10 +1186,14 @@ public final class ColdLife
 		{
 			return false; // the stock changed while it planned: it plans again next visit
 		}
-		bot.setAdena(bot.getAdena() - plan.cost() - fee);
+		bot.setAdena(bot.getAdena() - plan.cost() - (small ? 0L : fee));
 		if (plan.recipeCost() > 0L)
 		{
 			bot.addGearRecipe(plan.recipe().recipeItemId());
+		}
+		if (small)
+		{
+			return craftInTown(bot, town, now, context, events, plan.recipe().productId(), plan.pieces(), plan.recipe().saleTown(), "pieces of gear", 0L);
 		}
 		bot.setCarry(plan.recipe().productId(), plan.pieces(), plan.recipe().saleTown());
 		moveTo(bot, way.arrival());
@@ -1179,6 +1201,29 @@ public final class ColdLife
 		bot.setActivity(CRAFTING);
 		bot.setLeg(TravelLeg.stay(way.arrival(), now, shop.craftMs()));
 		events.add(new DecisionLog.Event(null, "Bought the " + ((plan.recipeCost() > 0L) ? "recipe and " : "") + "materials for " + DecisionLog.num(plan.pieces()) + " pieces of gear (item " + plan.recipe().productId() + ") from the towns' stock and the vendors for " + DecisionLog.num(plan.cost()) + " adena. Off to " + CRAFT_ZONE + " to craft them"));
+		return true;
+	}
+
+	/**
+	 * A handful of crafts is not worth the trip to Devil's Isle: the Merchant crafts it on the spot (no time, no fee, no scroll),
+	 * carries it to the town it sells in and puts it on sale, then goes back to hunting.
+	 * @param cost the adena already taken for the materials (for the message only)
+	 * @return whether she set off for the sale town (false: she is in it, and the batch is on sale)
+	 */
+	private static boolean craftInTown(ColdBot bot, Town town, long now, Context context, List<DecisionLog.Event> events, int item, long count, String saleTown, String what, long cost)
+	{
+		bot.setCarry(item, count, saleTown);
+		events.add(new DecisionLog.Event(null, "A small batch: crafted " + DecisionLog.num(count) + " " + what + " (item " + item + ") in " + town.name() + " without going to " + CRAFT_ZONE));
+		final Town dest = context.catalog().town(saleTown);
+		if ((dest == null) || (dest == town))
+		{
+			listCarry(bot, context, events);
+			return false;
+		}
+		bot.setTown(dest.name());
+		bot.setActivity(DELIVERING);
+		bot.setLeg(TravelLeg.stay(dest.arrival(), now, context.travel().escapeCastMs()));
+		events.add(new DecisionLog.Event(null, "Heads to " + dest.name() + " to put them on sale (gatekeeper 0 adena)"));
 		return true;
 	}
 

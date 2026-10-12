@@ -264,11 +264,11 @@ public class LivingPopulationManager
 	 * @param demandHours how many hours of shot demand it averages over
 	 * @param maxMarkup how far above its floor price a shot sells while the shop holds none (0.5 = 50% more)
 	 */
-	public record MerchantConfig(ShotCrafting.Prices prices, long craftMs, double hoursOfStock, long maxCrafts, int demandHours, double maxMarkup, boolean gear, long workingCapital, double upgradeShare)
+	public record MerchantConfig(ShotCrafting.Prices prices, long craftMs, double hoursOfStock, long maxCrafts, int demandHours, double maxMarkup, boolean gear, long workingCapital, double upgradeShare, long isleMinCrafts)
 	{
 		public MerchantConfig(ShotCrafting.Prices prices, long craftMs, double hoursOfStock, long maxCrafts, int demandHours, double maxMarkup)
 		{
-			this(prices, craftMs, hoursOfStock, maxCrafts, demandHours, maxMarkup, false, 0L, 1.0);
+			this(prices, craftMs, hoursOfStock, maxCrafts, demandHours, maxMarkup, false, 0L, 1.0, 0L);
 		}
 	}
 
@@ -703,6 +703,12 @@ public class LivingPopulationManager
 				_gearPrices.put(plan.recipe().productId(), price);
 			}
 			return true;
+		}
+
+		@Override
+		public long isleMinCrafts()
+		{
+			return _config.isleMinCrafts();
 		}
 
 		@Override
