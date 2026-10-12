@@ -441,7 +441,11 @@ public final class ColdLife
 			case DELIVERING:
 			{
 				listCarry(bot, context, events);
-				leaveTown(bot, now, context, events);
+				// Crafting trips come before the trainer in the town errands, so the skills it has waiting are learned now.
+				if (!visitTrainer(bot, context.catalog().town(bot.getTown()), now, context, events))
+				{
+					leaveTown(bot, now, context, events);
+				}
 				break;
 			}
 			default:
@@ -803,6 +807,10 @@ public final class ColdLife
 			return;
 		}
 
+		// Whatever brought it to town (a hunting trip, a death, a raid whose experience made levels), it looks at its class
+		// change again before anything else: the quest may have fallen due while it was away from hunting.
+		progressClassQuest(bot, now, context, events);
+
 		// Sell the loot gathered while hunting, then shop at the grocer with the proceeds.
 		if (bot.getLoot() > 0)
 		{
@@ -1047,10 +1055,10 @@ public final class ColdLife
 		return !isHunting(activity) && !TO_ZONE.equals(activity);
 	}
 
-	/** @return whether this class can craft the dwarven shot recipes (Artisan and Warsmith); only the Merchant, Sateya, does */
+	/** @return whether this class can craft the dwarven shot recipes (Artisan, Warsmith and Maestro: the Merchant's whole class path); only the Merchant, Sateya, does */
 	public static boolean isCrafter(int classId)
 	{
-		return (classId == 56) || (classId == 118);
+		return (classId == 56) || (classId == 57) || (classId == 118);
 	}
 
 	/**
@@ -1164,7 +1172,10 @@ public final class ColdLife
 		if (sale.equals(giran.name()) || (fee < 0L))
 		{
 			listCarry(bot, context, events);
-			leaveTown(bot, now, context, events);
+			if (!visitTrainer(bot, giran, now, context, events))
+			{
+				leaveTown(bot, now, context, events);
+			}
 			return;
 		}
 		bot.setTown(dest.name());
@@ -1376,6 +1387,10 @@ public final class ColdLife
 	 */
 	private static boolean visitTrainer(ColdBot bot, Town town, long now, Context context, List<DecisionLog.Event> events)
 	{
+		if (town == null)
+		{
+			return false;
+		}
 		final SkillPlanner.Lesson lesson = previewLesson(bot, trainingBudget(bot, bot.getAdena(), context), context);
 		if ((lesson == null) || !lesson.any())
 		{

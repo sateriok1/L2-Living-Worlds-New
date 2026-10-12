@@ -701,6 +701,18 @@ public class LivingTravelTest
 		check("other dwarves still pick their class by id, so not all become Artisans", (artisans > 0) && (artisans < 200));
 		check("the Merchant's class path is Artisan then Warsmith", (ClassPath.next(56, 1L, "Sateya") == 57));
 
+		// The Merchant is a Warsmith between levels 40 and 76 and must still craft there.
+		check("Artisan, Warsmith and Maestro all craft", ColdLife.isCrafter(56) && ColdLife.isCrafter(57) && ColdLife.isCrafter(118) && !ColdLife.isCrafter(53) && !ColdLife.isCrafter(58));
+		final ColdBot smith = bot(45, "Hunt", 100_000L, 10L, 2L, 0);
+		smith.setClassId(57);
+		smith.setRecipes(ShotCrafting.bit(ssD));
+		smith.setName("Sateya");
+		smith.setTown("Giran");
+		smith.setActivity(ColdLife.IN_TOWN);
+		smith.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		runUntil(smith, 1L, context, new ArrayList<>(), b -> ColdLife.CRAFTING.equals(b.getActivity()));
+		check("as a Warsmith the Merchant still goes to craft", ColdLife.CRAFTING.equals(smith.getActivity()) && (smith.getCarryCount() > 0L));
+
 		// A hunter that fires D shots buys them only from the shop in Gludio: it goes there, and the shots leave the stock.
 		final ColdBot hunter = bot(25, "Hunt", 100_000L, 10L, 2L, 0);
 		hunter.setSoulshots(0L);
@@ -1292,6 +1304,17 @@ public class LivingTravelTest
 		notDue.setLeg(TravelLeg.walk(new Point(0, 0, 0), new Point(5000, 0, 0), 0L, 10.0));
 		ColdLife.advance(notDue, 1_000L, 1_000L, classes, new ArrayList<>());
 		check("a class change that is not due leaves the trip alone", ColdLife.TO_ZONE.equals(notDue.getActivity()) && (notDue.getQuest() == null));
+
+		// Back in town after something other than hunting (a raid, a death) with the level for its class change: it sees it at once.
+		final ColdBot returning = bot(20, "Near Woods", 20_000L, 10L, 2L, 0);
+		returning.setClassId(18);
+		returning.setZone(null);
+		returning.setTown("Alpha");
+		returning.setActivity(ColdLife.TO_TOWN);
+		returning.setLeg(TravelLeg.stay(new Point(0, 0, 0), 0L, 0L));
+		final List<DecisionLog.Event> returningLog = new ArrayList<>();
+		runUntil(returning, 1L, classes, returningLog, b -> ColdLife.CLASS_MASTER.equals(b.getActivity()));
+		check("a bot back in town with its class change due goes to the master", (returning.getQuest() != null) && ColdLife.CLASS_MASTER.equals(returning.getActivity()) && returningLog.stream().anyMatch(e -> e.text().startsWith("Reached level 20")));
 
 		// Zones through a chain of gatekeepers, the total known before the bot sets out.
 		final ZoneCatalog chain = ZoneCatalog.parse(DEAD_END_XML.replace("</zones>", "<zone name=\"Far Plains\" minLevel=\"40\" maxLevel=\"60\"><teleport town=\"Far\" x=\"205000\" y=\"0\" z=\"0\" fee=\"100\"/><spot x=\"206000\" y=\"0\" z=\"0\"/></zone></zones>"));
