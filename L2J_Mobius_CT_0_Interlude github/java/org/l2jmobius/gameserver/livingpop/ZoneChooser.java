@@ -38,6 +38,10 @@ import org.l2jmobius.gameserver.livingpop.ZoneCatalog.Zone;
 public final class ZoneChooser
 {
 	/** A zone counts as reachable on foot from a town when its center is this close to the town. */
+	/** A zone is in the pool of good choices when it is worth at least this share of the best one to the bot. */
+	public static final double POOL_SHARE = 0.75;
+	/** A bot leaves the zone it is in when another that fits is worth this much more (its worth is under this share of the best). */
+	public static final double STAY_SHARE = 0.7;
 	public static final double WALK_RANGE = 15000;
 	/** Levels past a zone's top a bot keeps hunting there before it counts as outleveled (L2Solo allows about 4). */
 	public static final int OUTLEVEL_SLACK = 4;
@@ -87,12 +91,19 @@ public final class ZoneChooser
 	 *            MaxFreeTeleportLevel); its own level, not {@code level}, which drops while it avoids a zone
 	 * @param hasEscape whether the bot carries a Scroll of Escape. Without one it does not go where there is no way home on foot
 	 *            or by gatekeeper (an island without a town; see {@link #needsEscape})
+	 * @param wary a zone it died in once not long ago, or null
+	 * @param scorer what hunting a zone is worth this bot, in net experience an hour (after the experience its deaths cost), or null to choose by level fit alone; NaN for a zone it cannot judge
 	 */
-	public record Situation(int level, String race, Zone currentZone, Town town, long budget, Map<String, Integer> occupancy, int capacity, String avoid, boolean freeTeleport, boolean hasEscape, String wary)
+	public record Situation(int level, String race, Zone currentZone, Town town, long budget, Map<String, Integer> occupancy, int capacity, String avoid, boolean freeTeleport, boolean hasEscape, String wary, java.util.function.ToDoubleFunction<Zone> scorer)
 	{
+		public Situation(int level, String race, Zone currentZone, Town town, long budget, Map<String, Integer> occupancy, int capacity, String avoid, boolean freeTeleport, boolean hasEscape, String wary)
+		{
+			this(level, race, currentZone, town, budget, occupancy, capacity, avoid, freeTeleport, hasEscape, wary, null);
+		}
+
 		public Situation(int level, String race, Zone currentZone, Town town, long budget, Map<String, Integer> occupancy, int capacity, String avoid, boolean freeTeleport, boolean hasEscape)
 		{
-			this(level, race, currentZone, town, budget, occupancy, capacity, avoid, freeTeleport, hasEscape, null);
+			this(level, race, currentZone, town, budget, occupancy, capacity, avoid, freeTeleport, hasEscape, null, null);
 		}
 
 		public Situation(int level, String race, Zone currentZone, Town town, long budget, Map<String, Integer> occupancy, int capacity)
@@ -119,6 +130,12 @@ public final class ZoneChooser
 		boolean avoids(Zone zone)
 		{
 			return (avoid != null) && avoid.equals(zone.name());
+		}
+
+		/** @return what the zone is worth this bot, or NaN when there is no scorer or the zone is not one it can judge */
+		double worth(Zone zone)
+		{
+			return (scorer == null) ? Double.NaN : scorer.applyAsDouble(zone);
 		}
 
 		/** @return whether the bot should stay away from this zone because it has no scroll to get back from it */
@@ -172,7 +189,7 @@ public final class ZoneChooser
 		// Keep the current zone while it still fits (up to OUTLEVEL_SLACK levels past its top) and is not clearly
 		// overcrowded. A zone just at its limit is kept: the bots already there do not all bounce out to another one.
 		final Zone current = situation.currentZone();
-		if ((current != null) && !current.isStarter() && !situation.avoids(current) && !situation.warns(current) && !situation.cannotReturnFrom(current, catalog) && (situation.level() >= current.minLevel()) && (situation.level() <= (current.maxLevel() + OUTLEVEL_SLACK)) && !overFull(current, situation))
+		if ((current != null) && !current.isStarter() && !situation.avoids(current) && !situation.warns(current) && !situation.cannotReturnFrom(current, catalog) && (situation.level() >= current.minLevel()) && (situation.level() <= (current.maxLevel() + OUTLEVEL_SLACK)) && !overFull(current, situation) && !clearlyWorse(current, situation, catalog))
 		{
 			final Choice stay = route(current, town, catalog, situation.freeTeleport());
 			if ((stay != null) && (stay.fee() <= situation.budget()))
@@ -238,6 +255,25 @@ public final class ZoneChooser
 					options.addAll(local);
 				}
 			}
+		}
+
+		// With the zone model: what each zone is worth to this bot (its gear, potions and the deaths it would cost), best first. Zones it cannot judge keep the fit order.
+		final List<Choice> scored = new ArrayList<>();
+		for (Choice option : options)
+		{
+			if (!Double.isNaN(situation.worth(option.zone())))
+			{
+				scored.add(option);
+			}
+		}
+		if (!scored.isEmpty())
+		{
+			scored.sort(Comparator.comparingDouble((Choice c) -> -situation.worth(c.zone())).thenComparingLong(Choice::fee));
+			final double top = situation.worth(scored.get(0).zone());
+			// Only zones that are worth something near the best: a bot is not sent to a zone that earns a fraction of what another does.
+			scored.removeIf(c -> (top > 0.0) && (situation.worth(c.zone()) < (top * POOL_SHARE)));
+			final int worthPool = Math.min(3, scored.size());
+			return scored.get((random == null) ? 0 : random.nextInt(worthPool));
 		}
 
 		// Best fit first: a level about a third of the way into the zone's range (room to grow), then the cheapest trip.
@@ -436,6 +472,30 @@ public final class ZoneChooser
 		final Integer count = (situation.occupancy() == null) ? null : situation.occupancy().get(zone.name());
 		final int capacity = situation.capacity();
 		return (capacity > 0) && (count != null) && (count.intValue() >= (capacity + Math.max(1, capacity / 4)));
+	}
+
+	/** @return whether the zone it is in earns the bot clearly less than the best zone that fits (with no scorer, never) */
+	private static boolean clearlyWorse(Zone current, Situation situation, ZoneCatalog catalog)
+	{
+		final double here = situation.worth(current);
+		if (Double.isNaN(here))
+		{
+			return false;
+		}
+		double best = Double.NEGATIVE_INFINITY;
+		for (Zone zone : catalog.zones())
+		{
+			if (zone.isStarter() || !zone.fits(situation.level()) || situation.avoids(zone) || situation.cannotReturnFrom(zone, catalog))
+			{
+				continue;
+			}
+			final double worth = situation.worth(zone);
+			if (!Double.isNaN(worth))
+			{
+				best = Math.max(best, worth);
+			}
+		}
+		return (best > 0.0) && (here < (best * STAY_SHARE));
 	}
 
 	private static double fitScore(Zone zone, int level)

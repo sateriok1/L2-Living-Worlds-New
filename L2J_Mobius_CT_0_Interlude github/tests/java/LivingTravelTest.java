@@ -309,6 +309,19 @@ public class LivingTravelTest
 		final ZoneChooser.Choice notWary = ZoneChooser.choose(new ZoneChooser.Situation(18, "Elf", catalog.zone("Near Woods"), alpha, 100_000L, null, 0, null, false, true, "Far Hills"), catalog, null);
 		check("a warning about another zone changes nothing", "Near Woods".equals(notWary.zone().name()));
 
+		// With the zone model each zone has a worth to this bot: it goes where it earns most, and stays when its zone is near the best.
+		final java.util.function.ToDoubleFunction<ZoneCatalog.Zone> farBest = z -> "Far Hills".equals(z.name()) ? 1000.0 : 100.0;
+		final java.util.function.ToDoubleFunction<ZoneCatalog.Zone> nearClose = z -> "Far Hills".equals(z.name()) ? 1000.0 : 900.0;
+		final java.util.function.ToDoubleFunction<ZoneCatalog.Zone> unknown = z -> Double.NaN;
+		final ZoneChooser.Choice moves = ZoneChooser.choose(new ZoneChooser.Situation(18, "Elf", catalog.zone("Near Woods"), alpha, 100_000L, null, 0, null, false, true, null, farBest), catalog, null);
+		check("a bot leaves a zone that earns clearly less than another that fits", "Far Hills".equals(moves.zone().name()));
+		final ZoneChooser.Choice stays = ZoneChooser.choose(new ZoneChooser.Situation(18, "Elf", catalog.zone("Near Woods"), alpha, 100_000L, null, 0, null, false, true, null, nearClose), catalog, null);
+		check("and stays when its zone is near the best", "Near Woods".equals(stays.zone().name()));
+		final ZoneChooser.Choice fresh = ZoneChooser.choose(new ZoneChooser.Situation(18, "Elf", null, alpha, 100_000L, null, 0, null, false, true, null, farBest), catalog, null);
+		check("a bot with no zone yet picks the one worth most", "Far Hills".equals(fresh.zone().name()));
+		final ZoneChooser.Choice judged = ZoneChooser.choose(new ZoneChooser.Situation(18, "Elf", catalog.zone("Near Woods"), alpha, 100_000L, null, 0, null, false, true, null, unknown), catalog, null);
+		check("a zone the model cannot judge keeps the level-fit rule", "Near Woods".equals(judged.zone().name()));
+
 		// Level 18 with no zone: Far Hills is the better fit on levels, but it is far from the human newbie grounds.
 		final ZoneChooser.Choice elf = ZoneChooser.choose(new ZoneChooser.Situation(18, "Elf", null, alpha, 100_000L, null, 0), catalog, null);
 		check("without a home any zone that fits best", "Far Hills".equals(elf.zone().name()));

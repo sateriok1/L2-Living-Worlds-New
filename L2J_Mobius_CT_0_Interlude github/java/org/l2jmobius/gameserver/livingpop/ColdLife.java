@@ -2771,7 +2771,41 @@ public final class ColdLife
 		final int level = avoiding ? Math.max(1, bot.getLevel() - ColdRisk.AVOID_LEVEL_PENALTY) : bot.getLevel();
 		final ColdRisk.Params riskParams = context.risk();
 		final String wary = (!avoiding && (riskParams != null) && (risk.deathZone() != null) && (risk.zoneDeaths() > 0) && ((now - risk.lastDeathAt()) < riskParams.avoidMs())) ? risk.deathZone() : null;
-		return new ZoneChooser.Situation(level, bot.getRace(), current, town, budget, occupancy, context.travel().zoneCapacity(), avoiding ? risk.avoidZone() : null, freeTeleport(bot, context), bot.getEscapes() > 0, wary);
+		return new ZoneChooser.Situation(level, bot.getRace(), current, town, budget, occupancy, context.travel().zoneCapacity(), avoiding ? risk.avoidZone() : null, freeTeleport(bot, context), bot.getEscapes() > 0, wary, zoneWorth(bot, occupancy, context));
+	}
+
+	/** The share of a zone's spawns a bot can practically reach, as the hunting model uses it (RespawnShare). */
+	private static final double ZONE_SHARE = 0.5;
+
+	/**
+	 * @return what hunting a zone is worth this bot in net experience an hour, from the zone model: its kills a minute with the
+	 *         gear it wears and the potions it has, the zone's experience per kill, less the experience its deaths cost (twice
+	 *         the deaths without potions); NaN where the model does not know the zone, so the chooser falls back to level fit. Null
+	 *         without a zone model
+	 */
+	private static java.util.function.ToDoubleFunction<Zone> zoneWorth(ColdBot bot, Map<String, Integer> occupancy, Context context)
+	{
+		final ZoneCombat combat = context.combat();
+		if ((combat == null) || !combat.enabled() || (context.expToNext() == null))
+		{
+			return null;
+		}
+		final int level = bot.getLevel();
+		final ZoneCombat.Stats stats = statsOf(bot, context.gear(), combat);
+		final double habit = context.travel().potionsPerHour() * LivingSupplies.potionUseFactor(bot.getClassId());
+		final double lossPerDeath = (ColdRisk.expLossPercent(level) / 100.0) * context.expToNext().applyAsLong(level);
+		return zone ->
+		{
+			if (!combat.knows(zone.name()) || (combat.expPerKill(zone.name()) <= 0.0))
+			{
+				return Double.NaN;
+			}
+			final double perHour = (bot.getPotions() > 0) ? combat.potionsPerHour(zone.name(), bot.getClassId(), level, stats, 1.0, habit) : 0.0;
+			final double kills = Math.max(0.3, Math.min(combat.killsPerMinute(zone.name(), bot.getClassId(), level, stats, 1.0, 1.0, false, perHour), combat.respawnCap(zone.name(), (occupancy == null ? 0 : occupancy.getOrDefault(zone.name(), 0)) + 1, ZONE_SHARE)));
+			final double rate = combat.deathsPerHour(zone.name(), bot.getClassId(), level, stats);
+			final double deaths = (rate >= 0.0) ? ColdRisk.fromRate(rate, bot.getPotions()).deathsPerHour() : 0.0;
+			return (kills * 60.0 * combat.expPerKill(zone.name())) - (deaths * lossPerDeath);
+		};
 	}
 
 	private static String planKey(GoalPlanner.Plan plan)
