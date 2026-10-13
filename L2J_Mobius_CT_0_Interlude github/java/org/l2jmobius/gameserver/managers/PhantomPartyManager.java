@@ -62,6 +62,7 @@ import org.l2jmobius.gameserver.model.WorldObject;
 import org.l2jmobius.gameserver.model.actor.Creature;
 import org.l2jmobius.gameserver.model.actor.Player;
 import org.l2jmobius.gameserver.model.actor.instance.Cubic;
+import org.l2jmobius.gameserver.model.actor.instance.Defender;
 import org.l2jmobius.gameserver.model.actor.instance.Monster;
 import org.l2jmobius.gameserver.model.events.Containers;
 import org.l2jmobius.gameserver.model.events.EventType;
@@ -2953,6 +2954,28 @@ public class PhantomPartyManager
 		if (state.assist)
 		{
 			final WorldObject t = owner.getTarget();
+			// Siege test support (off by default): with the siege target flag on, a castle guard or door the leader
+			// targets is a legal party target even though it is not a Monster. Handled on its own small path.
+			// Defending works like it does against monsters: the leader's guard target comes first; a guard on this
+			// member beats a door target (doors do not hit back); with no siege target, a guard on anyone in the party.
+			final boolean siegeTarget = PhantomSiege.isSiegeTarget(npc, t) && (owner.calculateDistance2D(t) <= ASSIST_MAX_RANGE);
+			Creature siegeFocus = null;
+			if (siegeTarget)
+			{
+				siegeFocus = (t instanceof Defender) ? (Creature) t : PhantomSiege.guardOnParty(npc, owner, true);
+				if (siegeFocus == null)
+				{
+					siegeFocus = (Creature) t;
+				}
+			}
+			else if (PhantomSiege.isActive())
+			{
+				siegeFocus = PhantomSiege.guardOnParty(npc, owner, false);
+			}
+			if ((siegeFocus != null) && engageSiegeTarget(state, siegeFocus))
+			{
+				return;
+			}
 			// Assist only real, legal mob targets. A forbidden target the owner clicked - a fake-player shopkeeper
 			// (attacking it flags the phantom for PvP, the "seller got nuked in town" bug), a treasure box, or a quest
 			// monster - is never assisted, exactly as it is never picked while free-hunting.
@@ -3534,12 +3557,39 @@ public class PhantomPartyManager
 	}
 
 	/**
+	 * Siege test support: fights a castle guard or door the leader targeted. Casters stand at cast range and fire their
+	 * playstyle; everyone else closes in and keeps a swing going. No raid, pull or threat tactics - a siege target is
+	 * just something to bring down.
+	 */
+	private boolean engageSiegeTarget(Member state, Creature target)
+	{
+		final Player npc = state.npc;
+		if (npc.isDead() || npc.isCastingNow())
+		{
+			return true;
+		}
+		state.sitOrdered = false;
+		standIfSitting(npc);
+		npc.setTarget(target);
+		if (castsSpells(state) && (npc.getCurrentMpPercent() >= MP_REST_SIT))
+		{
+			PhantomCombatActions.approachCaster(npc, target, casterReach(state), ((npc.getObjectId() % 5) - 2) * CASTER_SPREAD_STEP);
+			if (tryPlaystyle(state, target))
+			{
+				return true;
+			}
+		}
+		keepSwinging(state, target);
+		return true;
+	}
+
+	/**
 	 * Keeps a live auto-attack on {@code focus}: engages or retargets through the AI, and relaunches a swing loop that a
 	 * skill cast stopped. Phantoms cast by calling {@code doCast} directly, so the AI is never told to go back to
 	 * attacking, and a swing that comes due mid-cast is dropped (AbstractAI ignores READY_TO_ACT while casting). Used by
 	 * assist, camp and free hunt, and by a Warcryer-line support meleeing between buffs.
 	 */
-	private void keepSwinging(Member state, Monster focus)
+	private void keepSwinging(Member state, Creature focus)
 	{
 		if (FakePlayersConfig.PHANTOM_COMBAT_CONTROLLER)
 		{
@@ -6452,7 +6502,7 @@ public class PhantomPartyManager
 	 * @return {@code true} if a cast launched - the caller skips the attack re-issue this tick; {@code false} when nothing
 	 *         fitted or the server refused the cast
 	 */
-	private boolean tryPlaystyle(Member state, Monster focus)
+	private boolean tryPlaystyle(Member state, Creature focus)
 	{
 		final Player npc = state.npc;
 		if (FakePlayersConfig.PHANTOM_COMBAT_CONTROLLER)

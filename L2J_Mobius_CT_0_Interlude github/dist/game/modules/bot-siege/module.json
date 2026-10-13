@@ -1,0 +1,10 @@
+{
+  "id": "bot-siege",
+  "name": "Bot Siege",
+  "version": "1.0.0",
+  "apiVersion": "1",
+  "entrypoint": "modules.botsiege.BotSiegeModule",
+  "description": "GM test commands (.botclan, .botsiege) for sieges with phantom parties.",
+  "author": "Living World",
+  "priority": 100
+}
